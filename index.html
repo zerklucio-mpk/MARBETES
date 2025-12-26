@@ -1,0 +1,87 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CV DIRECTO | Generador de Marbetes</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" crossorigin="anonymous">
+  <style>
+    :root {
+      --bg-color: #09090b;
+      --accent-color: #3b82f6;
+    }
+    body {
+      font-family: 'Outfit', sans-serif;
+      background-color: var(--bg-color);
+      color: #fafafa;
+      margin: 0;
+      overflow-x: hidden;
+    }
+    .grid-background {
+      position: fixed;
+      inset: 0;
+      background-image: 
+        linear-gradient(to right, #18181b 1px, transparent 1px),
+        linear-gradient(to bottom, #18181b 1px, transparent 1px);
+      background-size: 40px 40px;
+      z-index: -1;
+      mask-image: radial-gradient(circle at center, black, transparent 80%);
+    }
+    .font-mono-data {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .industrial-border {
+      border: 1px solid #27272a;
+      background: rgba(18, 18, 21, 0.8);
+      backdrop-filter: blur(10px);
+    }
+    input::placeholder {
+      color: #52525b;
+    }
+
+    @media print {
+      body {
+        background: white !important;
+        color: black !important;
+      }
+      .grid-background, .print\:hidden {
+        display: none !important;
+      }
+      #marbete-container {
+        margin: 0 auto !important;
+        box-shadow: none !important;
+        border: 3px solid black !important;
+        width: 100% !important;
+        max-width: none !important;
+      }
+      @page {
+        margin: 1cm;
+        size: auto;
+      }
+    }
+  </style>
+
+<link rel="stylesheet" href="/index.css">
+<script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "qrcode": "https://esm.sh/qrcode@^1.5.3",
+    "html-to-image": "https://esm.sh/html-to-image@^1.11.11"
+  }
+}
+</script>
+  <script type="module" crossorigin src="/MARBETES/assets/index-VvDDhn0R.js"></script>
+</head>
+<body>
+  <div class="grid-background"></div>
+  <div id="root"></div>
+</body>
+</html>

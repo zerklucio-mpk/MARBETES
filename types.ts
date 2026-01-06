@@ -6,7 +6,6 @@ export enum LabelType {
 export interface InventoryData {
   sku: string;
   description: string;
-  localizador: string;
   pieces: number;
   subinventario: string;
 }
@@ -17,7 +16,7 @@ export interface ProductRecord extends InventoryData {
 
 export type BarcodeDataMode = 'SKU_ONLY' | 'STRUCTURED';
 export type QRDataFormat = 'JSON' | 'PIPE' | 'CSV' | 'PREFIJO';
-export type PaperSize = 'LETTER' | 'LABEL' | 'LABEL2';
+export type PaperSize = 'LETTER';
 
 export interface TemplateConfig {
   headerText: string;

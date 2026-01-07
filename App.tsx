@@ -1,27 +1,57 @@
 
+/**
+ * =========================================================================
+ * CODIGO SQL PARA GENERAR LAS TABLAS EN SUPABASE
+ * =========================================================================
+ * 
+ * -- 1. Tabla de Inventario
+ * CREATE TABLE IF NOT EXISTS inventory (
+ *   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+ *   sku TEXT NOT NULL,
+ *   description TEXT,
+ *   localizador TEXT NOT NULL,
+ *   pieces INTEGER DEFAULT 0,
+ *   subinventario TEXT,
+ *   created_at TIMESTAMPTZ DEFAULT NOW()
+ * );
+ * 
+ * -- 2. Tabla de Layout
+ * CREATE TABLE IF NOT EXISTS warehouse_layout (
+ *   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+ *   localizador TEXT NOT NULL UNIQUE,
+ *   zone TEXT,
+ *   created_at TIMESTAMPTZ DEFAULT NOW()
+ * );
+ */
+
 import React, { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import QRCode from 'qrcode';
 import { toJpeg } from 'html-to-image';
 import { createClient } from '@supabase/supabase-js';
 import { 
   QrCode as QrCodeIcon, 
-  ClipboardList, 
-  Database, 
-  Search, 
-  Trash2, 
-  UploadCloud, 
-  Plus, 
-  CheckSquare, 
-  Square, 
-  Download, 
-  Loader2, 
-  ImagePlus, 
+  Printer, 
   Palette, 
-  Info, 
-  FileSpreadsheet,
-  AlertTriangle,
   X,
-  CheckCircle2
+  ClipboardList,
+  Database,
+  Search,
+  Trash2,
+  UploadCloud,
+  Scan,
+  Plus,
+  CheckSquare,
+  Square,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Loader2,
+  FileText,
+  Tag,
+  LayoutGrid,
+  Trash,
+  Layers,
+  FileSpreadsheet
 } from 'lucide-react';
 import { 
   InventoryData,
@@ -29,573 +59,678 @@ import {
   ProductRecord
 } from './types';
 
-// --- CONFIGURACIÓN SUPABASE ---
 const SUPABASE_URL = 'https://pbtsimirbnvnghlqszgn.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBidHNpbWlyYm52bmdobHFzemduIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MDc3MTUsImV4cCI6MjA4MzI4MzcxNX0.PcYb2opgRzfl8iIllfi3uCX2cA38uhvsURLnXl1NvYM';
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// --- UTILIDADES ---
-const parseCSVLine = (text: string, delimiter: string) => {
-  const result: string[] = [];
-  let currentField = '';
-  let inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    if (char === '"') {
-      if (inQuotes && text[i + 1] === '"') { currentField += '"'; i++; }
-      else { inQuotes = !inQuotes; }
-    } else if (char === delimiter && !inQuotes) { result.push(currentField.trim()); currentField = ''; }
-    else { currentField += char; }
-  }
-  result.push(currentField.trim());
-  return result;
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const ZONES = ['TODOS', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
+
+// MAPEO DE PAREJAS DE RACKS (PASILLOS)
+const RACK_PAIRS: Record<string, string> = {
+  'A': 'AB', 'B': 'AB', 'C': 'CD', 'D': 'CD', 'E': 'EF', 'F': 'EF',
+  'G': 'GH', 'H': 'GH', 'I': 'IJ', 'J': 'IJ', 'K': 'KL', 'L': 'KL'
+};
+const LEFT_RACKS = new Set(['A', 'C', 'E', 'G', 'I', 'K']); 
+const RIGHT_RACKS = new Set(['B', 'D', 'F', 'H', 'J', 'L']);
+
+const PASILLO_MAP: Record<string, [string, string]> = {
+  'AB': ['A', 'B'], 'CD': ['C', 'D'], 'EF': ['E', 'F'],
+  'GH': ['G', 'H'], 'IJ': ['I', 'J'], 'KL': ['K', 'L']
 };
 
-// --- COMPONENTES ---
+/**
+ * UTILIDAD DE ORDENAMIENTO LOGÍSTICO (RACK-COL-LVL)
+ */
+const compareLocators = (a: string, b: string) => {
+  const parse = (loc: string) => {
+    const parts = (loc || '').toUpperCase().split('-');
+    return {
+      rack: parts[0] || 'Z',
+      col: parseInt(parts[1]) || 0,
+      lvl: parseInt(parts[2]) || 0
+    };
+  };
+  const la = parse(a), lb = parse(b);
+  if (la.rack !== lb.rack) return la.rack.localeCompare(lb.rack);
+  if (la.col !== lb.col) return la.col - lb.col;
+  return la.lvl - lb.lvl;
+};
 
 const QRRenderer = memo(({ value, size }: { value: string; size: number }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
+    let active = true;
     if (canvasRef.current && value) {
       QRCode.toCanvas(canvasRef.current, value, {
-        width: size,
-        margin: 1, 
-        color: { dark: '#000000', light: '#ffffff' },
-        errorCorrectionLevel: 'M'
-      }, (error) => { if (error) console.error("Error QR", error); });
+        width: size, margin: 1, color: { dark: '#000000', light: '#ffffff' }, errorCorrectionLevel: 'M'
+      }, (error) => { if (error && active) console.error("Error QR:", error); });
     }
+    return () => { active = false; };
   }, [value, size]);
   return <canvas ref={canvasRef} className="max-w-full h-auto" />;
 });
 
-const PrintableLabel = memo(({ product, template }: { product: ProductRecord | null; template: TemplateConfig }) => {
-  if (!product) return <div className="w-full h-full bg-zinc-50 border border-zinc-100 flex items-center justify-center text-[8px] text-zinc-300 font-black uppercase">Espacio Vacío</div>;
+const PrintableLabel = memo(({ product, template, isMiniMode = false }: any) => {
+  const isEmptyLoc = product.sku === 'UBICACIÓN VACÍA';
+  const isPickingLoc = product.sku === 'PICKING';
+  const isSpecial = isEmptyLoc || isPickingLoc;
+  
+  const isPickeoZone = useMemo(() => product.localizador?.toString().trim().endsWith('1'), [product.localizador]);
+  
+  const qrValue = useMemo(() => {
+    if (isEmptyLoc) return "EMPTY_LOCATION";
+    if (isPickingLoc) return "PICKING_LOCATION";
+    const piecesData = isPickeoZone ? '0' : product.pieces;
+    return `${product.sku || '---'}_${piecesData}_${product.description || 'N/A'}_${product.subinventario || 'N/A'}_${product.localizador || '---'}`;
+  }, [product, isPickeoZone, isEmptyLoc, isPickingLoc]);
 
-  const qrValue = `${product.sku}${template.qrSeparator}${product.pieces}${template.qrSeparator}${product.description}${template.qrSeparator}${product.subinventario || ''}`;
+  const displayQrSize = isMiniMode ? 105 : template.qrSize;
 
-  const descriptionFontSize = useMemo(() => {
-    const len = product.description?.length || 0;
-    if (len > 45) return 'text-[6px] leading-[1.1]';
-    if (len > 25) return 'text-[7.5px] leading-tight';
-    return 'text-[9px] font-bold uppercase overflow-hidden line-clamp-2';
-  }, [product.description]);
-
-  return (
-    <div className="bg-white text-black flex flex-col h-full w-full font-sans box-border select-none border border-zinc-200 overflow-hidden">
-      <div className="bg-black text-white px-3 py-1.5 flex items-center gap-2 shrink-0 h-[45px]">
-        {template.logoUrl ? (
-          <img src={template.logoUrl} className="h-6 w-auto object-contain" alt="Logo" />
-        ) : (
-          <div className="w-7 h-7 bg-red-600 rounded-full flex items-center justify-center font-black text-[9px]">CV</div>
-        )}
-        <div className="flex flex-col">
-          <h2 className="text-base font-black leading-none tracking-tighter uppercase">{template.headerText}</h2>
-          <p className="text-[5px] font-bold uppercase tracking-[0.2em] opacity-80 mt-0.5">MARBETE DE CONTROL</p>
-        </div>
-      </div>
-
-      <div className="flex-1 flex flex-col px-4 py-2 overflow-hidden">
-        <div className="flex justify-between items-end mb-0.5">
-          <div className="min-w-0 flex-1">
-            <p className="text-[5px] font-black text-zinc-400 uppercase tracking-tight">ID / SKU</p>
-            <p className="text-base font-bold leading-none uppercase truncate tracking-tight">{product.sku || '---'}</p>
-          </div>
-          <div className="text-right ml-2 shrink-0">
-            <p className="text-[5px] font-black text-zinc-400 uppercase tracking-tight">CANTIDAD</p>
-            <p className="text-xl font-black leading-none">{product.pieces || 0}</p>
-          </div>
-        </div>
-        <div className="h-[1.5px] bg-black w-full mb-3"></div>
-        <div className="flex-1 flex flex-col items-center justify-center overflow-hidden py-1">
-          <QRRenderer value={qrValue} size={template.qrSize || 100} />
-        </div>
-        
-        <div className="mt-1 border-t border-zinc-100 pt-1 min-h-[24px] flex flex-col justify-start">
-          <p className="text-[5px] font-black text-zinc-400 uppercase tracking-tight leading-none mb-0.5">DESCRIPCIÓN DEL ARTÍCULO</p>
-          <p className={`${descriptionFontSize} font-bold uppercase overflow-hidden line-clamp-2`}>
-            {product.description || 'N/A'}
-          </p>
-        </div>
-
-        <div className="mt-1.5 mb-1.5 border border-zinc-300 rounded-lg p-2 flex items-center bg-zinc-50/30">
-          <div className="flex-1 min-w-0">
-            <p className="text-[5px] font-black text-zinc-400 uppercase leading-none mb-0.5">SUBINVENTARIO</p>
-            <p className="text-[10px] font-black uppercase truncate leading-tight text-black">{product.subinventario || '---'}</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-});
-
-const LabelSheet = memo(({ products, template }: { products: ProductRecord[]; template: TemplateConfig }) => {
-  if (template.qrsPerLabel === 4) {
+  if (isMiniMode) {
     return (
-      <div className="grid grid-cols-2 grid-rows-2 w-full h-full gap-0 bg-white">
-        <PrintableLabel product={products[0] || null} template={template} />
-        <PrintableLabel product={products[1] || null} template={template} />
-        <PrintableLabel product={products[2] || null} template={template} />
-        <PrintableLabel product={products[3] || null} template={template} />
+      <div className={`bg-white text-black flex flex-col h-full w-full overflow-hidden font-sans border box-border ${isSpecial ? 'border-zinc-200 opacity-60' : 'border-zinc-300'}`}>
+        <div className={`${isPickingLoc ? 'bg-orange-600' : (isEmptyLoc ? 'bg-zinc-400' : 'bg-black')} text-white px-2 flex items-center justify-between shrink-0 h-[18px]`}>
+          <div className="flex items-center gap-1">
+            <div className="w-3 h-3 bg-red-600 rounded-full flex items-center justify-center font-black text-[5px]">CV</div>
+            <h2 className="text-[8px] font-black leading-none uppercase tracking-tighter">{template.headerText}</h2>
+          </div>
+          <span className="text-[5px] font-black opacity-70 uppercase tracking-tight">{product.subinventario || (isSpecial ? 'ZONA ESPECIAL' : 'CTL')}</span>
+        </div>
+        <div className="flex-1 flex flex-col items-center justify-between p-1 overflow-hidden">
+          <div className="w-full text-center shrink-0">
+             <span className="text-[4px] font-bold text-zinc-400 uppercase leading-none block tracking-tighter">{isSpecial ? 'TIPO DE ÁREA' : 'ARTÍCULO / SKU'}</span>
+             <p className={`text-[11px] font-black leading-none uppercase truncate tracking-tight ${isPickingLoc ? 'text-orange-600' : (isEmptyLoc ? 'text-zinc-400' : 'text-black')}`}>{product.sku}</p>
+          </div>
+          
+          <div className="flex-1 flex items-center justify-center w-full min-h-0 py-0.5">
+            {isSpecial ? (
+              <div className={`border-2 border-dashed rounded-full w-12 h-12 flex items-center justify-center ${isPickingLoc ? 'border-orange-100' : 'border-zinc-100'}`}>
+                {isPickingLoc ? (
+                   <Scan size={16} className="text-orange-200" />
+                ) : (
+                  <>
+                    <div className="w-6 h-0.5 bg-zinc-100 rotate-45 absolute"></div>
+                    <div className="w-6 h-0.5 bg-zinc-100 -rotate-45 absolute"></div>
+                  </>
+                )}
+              </div>
+            ) : (
+              <QRRenderer value={qrValue} size={displayQrSize} />
+            )}
+          </div>
+
+          <div className="w-full shrink-0 border-t border-zinc-200 pt-1 pb-1 px-1">
+            <div className="flex justify-between items-baseline">
+              <p className={`text-[8px] font-black leading-none uppercase tracking-tight truncate flex-1 mr-1 ${isPickingLoc ? 'text-orange-700' : (isEmptyLoc ? 'text-zinc-300' : 'text-blue-800')}`}>
+                {product.localizador} 
+                {!isSpecial && <span className="text-zinc-400 ml-1">[{product.subinventario || 'GNR'}]</span>}
+              </p>
+              {!isSpecial && <p className="text-[9px] font-black leading-none uppercase text-black shrink-0">{isPickeoZone ? '---' : product.pieces}</p>}
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
+
   return (
-    <div className="w-full h-full bg-white">
-      <PrintableLabel product={products[0] || null} template={template} />
+    <div className="bg-white text-black flex flex-col h-full w-full overflow-hidden font-sans box-border border border-zinc-300">
+      <div className={`${isPickingLoc ? 'bg-orange-600' : 'bg-black'} text-white px-5 py-2 flex items-center gap-3 shrink-0 h-[60px]`}>
+        <div className="w-9 h-9 bg-red-600 rounded-full flex items-center justify-center font-black text-xs">CV</div>
+        <div className="flex flex-col min-w-0">
+          <h2 className="text-xl font-black leading-none tracking-tighter truncate uppercase">{template.headerText}</h2>
+          <p className="text-[7px] font-bold uppercase tracking-[0.2em] opacity-80 mt-0.5">MARBETE DE CONTROL</p>
+        </div>
+      </div>
+      <div className="flex-1 flex flex-col px-6 py-3 overflow-hidden">
+        <div className="flex justify-between items-end mb-1 shrink-0">
+          <div className="min-w-0 flex flex-col">
+            <p className="text-[8px] font-black text-zinc-400 uppercase tracking-tight">{isSpecial ? 'SITUACIÓN' : 'ID / SKU'}</p>
+            <p className={`text-2xl font-black leading-none uppercase truncate ${isPickingLoc ? 'text-orange-600' : (isEmptyLoc ? 'text-zinc-300' : 'text-black')}`}>{product.sku || '---'}</p>
+          </div>
+          {!isSpecial && (
+            <div className="text-right shrink-0">
+              <p className="text-[8px] font-black text-zinc-400 uppercase tracking-tight">CANTIDAD</p>
+              <p className="text-3xl font-black leading-none">{isPickeoZone ? '---' : (product.pieces || 0)}</p>
+            </div>
+          )}
+        </div>
+        <div className={`h-[2px] w-full mb-3 ${isPickingLoc ? 'bg-orange-500' : 'bg-black'}`}></div>
+        <div className="flex-1 min-h-0 flex items-center justify-center py-1">
+          {isSpecial ? (
+            <div className={`font-black text-5xl opacity-10 ${isPickingLoc ? 'text-orange-900' : 'text-zinc-900'}`}>{isPickingLoc ? 'PICKING' : 'VACÍO'}</div>
+          ) : (
+            <QRRenderer value={qrValue} size={displayQrSize} />
+          )}
+        </div>
+        <div className="h-[1px] bg-zinc-200 w-full my-2"></div>
+        <p className="text-[12px] font-bold italic uppercase leading-none line-clamp-1 text-zinc-800 mb-2">
+          {isPickingLoc ? 'ÁREA DE SURTIDO ACTIVO' : (isEmptyLoc ? 'SIN REGISTRO EN BASE DE DATOS' : (product.description || 'N/A'))}
+        </p>
+        <div className={`border rounded-lg p-3 mt-auto shrink-0 ${isPickingLoc ? 'bg-orange-50 border-orange-200' : 'bg-zinc-50 border-zinc-200'}`}>
+          <p className={`text-2xl font-black uppercase leading-none ${isPickingLoc ? 'text-orange-900' : 'text-black'}`}>
+            {product.localizador || '---'} 
+            {!isSpecial && <span className="text-xs text-zinc-400 ml-2">[{product.subinventario || 'GENERAL'}]</span>}
+          </p>
+        </div>
+      </div>
     </div>
   );
 });
 
+const CatalogItem = memo(({ prod, isSelected, onToggle, onSelect, onDelete }: any) => (
+  <div className={`group border-2 rounded-2xl p-4 flex items-center gap-4 transition-all cursor-pointer ${isSelected ? 'bg-blue-600/10 border-blue-600/50' : 'bg-zinc-950/40 border-zinc-800/40 hover:border-zinc-700'}`} onClick={() => onToggle(prod)}>
+    <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${isSelected ? 'bg-blue-600 text-white shadow-lg' : 'bg-zinc-800 text-zinc-600'}`}>{isSelected ? <CheckSquare size={20} /> : <Square size={20} />}</div>
+    <div className="flex-1 min-w-0" onClick={(e) => { e.stopPropagation(); onSelect(prod); }}>
+      <p className={`text-sm font-black uppercase tracking-tight truncate ${isSelected ? 'text-blue-400' : 'text-zinc-100'}`}>{prod.sku}</p>
+      <div className="flex items-center gap-2 mt-0.5">
+        <span className="text-[8px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded font-bold uppercase">{prod.localizador}</span>
+        <span className="text-[8px] bg-blue-900/30 text-blue-400 px-1.5 py-0.5 rounded font-bold uppercase">{prod.pieces} UDS</span>
+      </div>
+    </div>
+    <button onClick={(e) => { e.stopPropagation(); onDelete(prod.id); }} className="p-2 text-zinc-800 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all hover:bg-red-500/10 rounded-lg"><Trash2 size={18} /></button>
+  </div>
+));
+
 const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'content' | 'database' | 'design'>('content');
+  const [activeTab, setActiveTab] = useState<'content' | 'database' | 'design' | 'layout'>('content');
+  const [showPreview, setShowPreview] = useState(false);
   const [exportProgress, setExportProgress] = useState<{current: number, total: number} | null>(null);
+  const [previewPage, setPreviewPage] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
-  const [dbStatus, setDbStatus] = useState<'connected' | 'error' | 'syncing'>('connected');
-  const [products, setProducts] = useState<ProductRecord[]>([]);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [inventory, setInventory] = useState<InventoryData>({ sku: '', description: '', pieces: 0, subinventario: '' });
-  const [showClearConfirm, setShowClearConfirm] = useState(false);
-  const [showDeleteSelectedConfirm, setShowDeleteSelectedConfirm] = useState(false);
+  const [selectedZone, setSelectedZone] = useState<string>('TODOS');
   
-  const sheetRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [products, setProducts] = useState<ProductRecord[]>([]);
+  const [selectedItems, setSelectedItems] = useState<Map<string, ProductRecord>>(new Map());
+  const [inventory, setInventory] = useState<InventoryData>({ sku: '', description: '', localizador: '', pieces: 0, subinventario: '' });
+  
+  const [layoutItems, setLayoutItems] = useState<{id: string, localizador: string, zone: string}[]>([]);
+  const [layoutFilterRack, setLayoutFilterRack] = useState<string>('TODOS');
+  const [layoutFilterColumn, setLayoutFilterColumn] = useState<string>('TODOS');
+  
+  const [isFetching, setIsFetching] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
   const csvInputRef = useRef<HTMLInputElement>(null);
 
   const [template, setTemplate] = useState<TemplateConfig>({
     headerText: 'CVDIRECTO', headerBg: '#000000', headerTextColor: '#ffffff', accentColor: '#3b82f6',
-    barcodeWidth: 160, barcodeHeight: 160, qrSize: 100, showDate: true, borderWidth: 4,
-    borderStyle: 'solid', fontFamily: 'font-sans', logoUrl: undefined, qrFormat: 'PIPE',
-    barcodeMode: 'STRUCTURED', qrSeparator: '_', paperSize: 'LETTER', qrsPerLabel: 4 
+    barcodeWidth: 160, barcodeHeight: 160, qrSize: 150, showDate: true, borderWidth: 4, borderStyle: 'solid',
+    fontFamily: 'font-sans', logoUrl: undefined, qrFormat: 'PIPE', barcodeMode: 'STRUCTURED', qrSeparator: '_', paperSize: 'LABEL2' 
   });
 
-  const fetchProducts = useCallback(async () => {
-    setDbStatus('syncing');
+  const fetchInventoryDataOnDemand = useCallback(async () => {
+    setIsFetching(true);
     try {
-      const { data, error } = await supabase.from('inventory').select('*').order('created_at', { ascending: false });
-      if (error) throw error;
-      setProducts((data || []).map(i => ({ ...i, id: String(i.id) })));
-      setDbStatus('connected');
-    } catch (err: any) { setDbStatus('error'); }
-  }, []);
+      let query = supabase.from('inventory').select('*');
+      if (searchTerm) query = query.ilike('sku', `%${searchTerm.toUpperCase()}%`);
+      if (selectedZone !== 'TODOS') query = query.ilike('localizador', `${selectedZone}-%`);
 
-  useEffect(() => { fetchProducts(); }, [fetchProducts]);
-
-  const currentPreviewProducts = useMemo(() => {
-    if (selectedIds.size > 0) {
-      return products.filter(p => selectedIds.has(p.id)).slice(0, 4);
+      const { data, error } = await query.limit(500);
+      if (!error && data) {
+        const sorted = (data as ProductRecord[]).sort((a, b) => compareLocators(a.localizador, b.localizador));
+        setProducts(sorted);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsFetching(false);
     }
-    return [{ ...inventory, id: 'preview' } as ProductRecord];
-  }, [selectedIds, products, inventory]);
+  }, [searchTerm, selectedZone]);
+
+  const fetchLayoutDataOnDemand = useCallback(async () => {
+    setIsFetching(true);
+    try {
+      let query = supabase.from('warehouse_layout').select('*');
+      if (layoutFilterRack !== 'TODOS') query = query.ilike('localizador', `${layoutFilterRack}-%`);
+      if (layoutFilterColumn !== 'TODOS') query = query.ilike('localizador', `%-${layoutFilterColumn}-%`);
+      if (layoutFilterRack === 'TODOS' && layoutFilterColumn === 'TODOS') query = query.limit(200);
+
+      const { data, error } = await query;
+      if (!error && data) {
+        const sorted = data.sort((a, b) => compareLocators(a.localizador, b.localizador));
+        setLayoutItems(sorted);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsFetching(false);
+    }
+  }, [layoutFilterRack, layoutFilterColumn]);
+
+  useEffect(() => { 
+    const timer = setTimeout(() => { fetchInventoryDataOnDemand(); }, 400); 
+    return () => clearTimeout(timer);
+  }, [searchTerm, selectedZone, fetchInventoryDataOnDemand]);
+  
+  useEffect(() => { 
+    if (activeTab === 'layout') fetchLayoutDataOnDemand(); 
+  }, [activeTab, layoutFilterRack, layoutFilterColumn, fetchLayoutDataOnDemand]);
 
   const handleAddProduct = async () => {
     if (!inventory.sku) return;
-    setDbStatus('syncing');
-    try {
-      const { data, error } = await supabase.from('inventory').insert([{
-        sku: inventory.sku.toUpperCase(), description: inventory.description.toUpperCase(),
-        pieces: inventory.pieces, subinventario: inventory.subinventario.toUpperCase()
-      }]).select();
-      if (error) throw error;
-      if (data) setProducts(prev => [{ ...data[0], id: String(data[0].id) }, ...prev]);
-      setInventory({ sku: '', description: '', pieces: 0, subinventario: '' });
-      setDbStatus('connected');
-    } catch (err: any) { setDbStatus('error'); }
-  };
-
-  const handleClearDatabase = async () => {
-    setShowClearConfirm(false);
-    setDbStatus('syncing');
-    try {
-      const { error } = await supabase.from('inventory').delete().not('id', 'is', null);
-      if (error) {
-        alert(`Error al vaciar nube: ${error.message}`);
-        throw error;
-      }
-      setProducts([]);
-      setSelectedIds(new Set());
-      setDbStatus('connected');
-    } catch (err: any) { 
-      setDbStatus('error');
-      console.error("Error completo de Supabase:", err);
+    const { data, error } = await supabase.from('inventory').insert([{ ...inventory, sku: inventory.sku.toUpperCase(), localizador: inventory.localizador.toUpperCase() }]).select();
+    if (!error && data) {
+      fetchInventoryDataOnDemand();
+      setInventory({ sku: '', description: '', localizador: '', pieces: 0, subinventario: '' });
+      alert('Guardado.');
     }
   };
 
-  const handleDeleteSelected = async () => {
-    setShowDeleteSelectedConfirm(false);
-    if (selectedIds.size === 0) return;
-    setDbStatus('syncing');
+  const handleExportBatch = async () => {
+    const printArea = document.getElementById('print-area');
+    if (!printArea) return;
+    setExportProgress({ current: 0, total: totalPages });
+    printArea.style.display = 'block';
     try {
-      const ids = Array.from(selectedIds);
-      const { error } = await supabase.from('inventory').delete().in('id', ids);
-      if (error) throw error;
-      setProducts(prev => prev.filter(p => !selectedIds.has(p.id)));
-      setSelectedIds(new Set());
-      setDbStatus('connected');
-    } catch (err: any) { setDbStatus('error'); }
+      const pages = printArea.querySelectorAll('.print-page');
+      for (let i = 0; i < pages.length; i++) {
+        setExportProgress({ current: i + 1, total: totalPages });
+        const dataUrl = await toJpeg(pages[i] as HTMLElement, { quality: 0.90, pixelRatio: 3, backgroundColor: '#ffffff', cacheBust: true });
+        const link = document.createElement('a');
+        link.download = `LOTE_PAG_${i + 1}.jpg`; link.href = dataUrl; link.click();
+        await new Promise(r => setTimeout(r, 1000)); 
+      }
+      setSelectedItems(new Map()); setShowPreview(false); alert('Lote descargado exitosamente.');
+    } catch (e) { alert('Error en la exportación.'); } finally { printArea.style.display = 'none'; setExportProgress(null); }
   };
 
-  const downloadCSVTemplate = () => {
-    const headers = "SKU,PIEZAS,DESCRIPTION,SUBINVENTARIO\n";
-    const sampleData = "0-91037-30236-6,3,STICK VAC PRESTO 2 EN 1,LINEA";
-    const blob = new Blob([headers + sampleData], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = "plantilla_marbetes.csv";
-    link.click();
+  const handleDownloadTemplate = () => {
+    const headers = "SKU,LOCALIZADOR,PIEZA,DESCRIPTION,SUBINVENTARIO";
+    const blob = new Blob([headers], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'template_inventario_cvdirecto.csv';
+    a.click();
+    window.URL.revokeObjectURL(url);
   };
 
-  const [batchProducts, setBatchProducts] = useState<ProductRecord[]>([]);
-
-  const handleBatchDownload = async () => {
-    if (selectedIds.size === 0) return;
-    const selectedItems = products.filter(p => selectedIds.has(p.id));
-    const chunkSize = template.qrsPerLabel;
-    const totalSheets = Math.ceil(selectedItems.length / chunkSize);
+  const handleUploadCSV = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
     
-    setExportProgress({ current: 0, total: totalSheets });
-
-    for (let i = 0; i < selectedItems.length; i += chunkSize) {
-      const chunk = selectedItems.slice(i, i + chunkSize);
-      setBatchProducts(chunk);
-      setExportProgress({ current: Math.floor(i / chunkSize) + 1, total: totalSheets });
-      await new Promise(r => setTimeout(r, 600)); 
-
-      if (sheetRef.current) {
-        try {
-          const dataUrl = await toJpeg(sheetRef.current, { quality: 1, pixelRatio: 3 });
-          const link = document.createElement('a');
-          link.download = `HOJA_MARBETES_${Math.floor(i / chunkSize) + 1}.jpg`;
-          link.href = dataUrl;
-          link.click();
-        } catch (err) { console.error("Error exportando", err); }
+    setIsFetching(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        const lines = text.split(/\r?\n/);
+        const dataToInsert: any[] = [];
+        
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (!line) continue;
+          
+          const columns = line.split(',');
+          const sku = columns[0]?.trim();
+          const loc = columns[1]?.trim();
+          const pz = columns[2]?.trim();
+          const desc = columns[3]?.trim();
+          const sub = columns[4]?.trim();
+          
+          if (sku && loc) {
+            dataToInsert.push({
+              sku: sku.toUpperCase(),
+              localizador: loc.toUpperCase(),
+              pieces: parseInt(pz) || 0,
+              description: desc || '',
+              subinventario: sub || ''
+            });
+          }
+        }
+        
+        if (dataToInsert.length > 0) {
+          const { error } = await supabase.from('inventory').insert(dataToInsert);
+          if (error) {
+            alert('Error al subir datos: ' + error.message);
+          } else {
+            alert(`Se han importado ${dataToInsert.length} registros exitosamente.`);
+            fetchInventoryDataOnDemand();
+          }
+        } else {
+          alert('No se encontraron datos válidos en el archivo.');
+        }
+      } catch (err) {
+        alert('Error al procesar el archivo CSV.');
+      } finally {
+        setIsFetching(false);
+        if (csvInputRef.current) csvInputRef.current.value = '';
       }
-    }
-    setBatchProducts([]);
-    setExportProgress(null);
+    };
+    reader.readAsText(file);
   };
 
-  const filteredProducts = useMemo(() => {
-    if (!searchTerm) return products;
-    const s = searchTerm.toLowerCase();
-    return products.filter(p => p.sku.toLowerCase().includes(s) || p.description.toLowerCase().includes(s));
-  }, [products, searchTerm]);
+  const handleDeleteAll = async () => {
+    setIsFetching(true);
+    try {
+      const { error } = await supabase.from('inventory').delete().filter('id', 'not.is', null);
+      if (error) {
+        alert('Error al borrar datos: ' + error.message);
+      } else {
+        alert('Historial borrado exitosamente.');
+        fetchInventoryDataOnDemand();
+        setSelectedItems(new Map());
+      }
+    } catch (err) {
+      alert('Error al procesar la solicitud.');
+    } finally {
+      setIsFetching(false);
+      setShowDeleteConfirm(false);
+    }
+  };
+
+  /**
+   * LÓGICA DE ORGANIZACIÓN FRENTE Y FONDO CON RELLENO DE VACÍOS Y PICKING
+   */
+  const baseCapacity = template.paperSize === 'LETTER' ? 4 : (template.paperSize === 'LABEL' ? 6 : 12);
+  const organizedPrintingData = useMemo(() => {
+    const raw: ProductRecord[] = selectedItems.size > 0 ? Array.from(selectedItems.values()) : (inventory.sku ? [{ ...inventory, id: 'temp' } as ProductRecord] : []);
+    
+    if (template.paperSize !== 'LABEL2' || raw.length === 0) return raw;
+
+    const groups: Record<string, ProductRecord[]> = {};
+    
+    raw.forEach(p => { 
+      const parts = (p.localizador || '').split('-');
+      const rack = parts[0] || 'Z';
+      const col = parts[1] || '0';
+      const aisle = RACK_PAIRS[rack] || rack;
+      const key = `${aisle}-${col}`;
+      if (!groups[key]) groups[key] = []; 
+      groups[key].push(p); 
+    });
+
+    const pages: (ProductRecord | null)[] = [];
+    
+    const sortedKeys = Object.keys(groups).sort((a, b) => {
+      const pa = a.split('-'), pb = b.split('-');
+      if (pa[0] !== pb[0]) return pa[0].localeCompare(pb[0]);
+      return (parseInt(pa[1]) || 0) - (parseInt(pb[1]) || 0);
+    });
+
+    sortedKeys.forEach(key => {
+      const [aisle, col] = key.split('-');
+      const racksInAisle = PASILLO_MAP[aisle] || [aisle, aisle];
+      
+      for (let l = 6; l >= 1; l--) {
+        const leftRack = racksInAisle[0];
+        const leftProd = groups[key]?.find((p: ProductRecord) => {
+          const parts = p.localizador.split('-');
+          return parts[0] === leftRack && parseInt(parts[2]) === l;
+        });
+        
+        if (l === 1) {
+            pages.push({
+                id: `picking-${leftRack}-${col}-${l}`,
+                sku: 'PICKING',
+                localizador: `${leftRack}-${col}-${l}`,
+                description: '',
+                pieces: 0,
+                subinventario: ''
+            } as ProductRecord);
+        } else {
+            pages.push(leftProd || {
+                id: `empty-${leftRack}-${col}-${l}`,
+                sku: 'UBICACIÓN VACÍA',
+                localizador: `${leftRack}-${col}-${l}`,
+                description: '',
+                pieces: 0,
+                subinventario: ''
+            } as ProductRecord);
+        }
+        
+        const rightRack = racksInAisle[1];
+        const rightProd = groups[key]?.find((p: ProductRecord) => {
+          const parts = p.localizador.split('-');
+          return parts[0] === rightRack && parseInt(parts[2]) === l;
+        });
+
+        if (l === 1) {
+            pages.push({
+                id: `picking-${rightRack}-${col}-${l}`,
+                sku: 'PICKING',
+                localizador: `${rightRack}-${col}-${l}`,
+                description: '',
+                pieces: 0,
+                subinventario: ''
+            } as ProductRecord);
+        } else {
+            pages.push(rightProd || {
+                id: `empty-${rightRack}-${col}-${l}`,
+                sku: 'UBICACIÓN VACÍA',
+                localizador: `${rightRack}-${col}-${l}`,
+                description: '',
+                pieces: 0,
+                subinventario: ''
+            } as ProductRecord);
+        }
+      }
+    });
+
+    return pages;
+  }, [selectedItems, inventory, template.paperSize]);
+
+  const totalPages = Math.ceil(organizedPrintingData.length / baseCapacity);
+  const printPageStyle = template.paperSize === 'LETTER' ? { width: '215.9mm', height: '279.4mm', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr' } : (template.paperSize === 'LABEL' ? { width: '100mm', height: '155mm', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr 1fr' } : { width: '100mm', height: '310mm', gridTemplateColumns: '1fr 1fr', gridTemplateRows: 'repeat(6, 1fr)' });
+
+  let lastRC_H = "";
+  let lastRC_L = "";
+
+  const handleToggleItem = useCallback((prod: ProductRecord) => {
+    setSelectedItems(prev => {
+      const next = new Map(prev);
+      if (next.has(prod.id)) next.delete(prod.id);
+      else next.set(prod.id, prod);
+      return next;
+    });
+  }, []);
 
   return (
-    <div className="min-h-screen text-zinc-100 flex flex-col">
-      {/* INPUT CSV GLOBAL */}
-      <input 
-        ref={csvInputRef} 
-        type="file" 
-        accept=".csv" 
-        className="hidden" 
-        onChange={async (e) => {
-          const file = e.target.files?.[0];
-          if (file) {
-            setDbStatus('syncing');
-            const reader = new FileReader();
-            reader.onload = async (ev) => {
-              try {
-                const content = ev.target?.result as string;
-                const lines = content.split(/\r?\n/).filter(l => l.trim() !== '');
-                if (lines.length < 2) {
-                  alert("El archivo está vacío o no tiene el formato correcto.");
-                  setDbStatus('connected');
-                  return;
-                }
-                const news = [];
-                for (let i = 1; i < lines.length; i++) {
-                  const cols = parseCSVLine(lines[i], ',');
-                  if (cols.length >= 3) {
-                    news.push({ 
-                      sku: cols[0].toUpperCase(), 
-                      pieces: parseInt(cols[1]) || 0, 
-                      description: cols[2].toUpperCase(), 
-                      subinventario: (cols[3] || '').toUpperCase() 
-                    });
-                  }
-                }
-                
-                if (news.length === 0) {
-                  alert("No se encontraron registros válidos en el CSV.");
-                } else {
-                  const { error } = await supabase.from('inventory').insert(news);
-                  if (error) throw error;
-                  alert(`¡Éxito! Se importaron ${news.length} registros.`);
-                  fetchProducts();
-                }
-              } catch (err: any) {
-                alert(`Error al importar: ${err.message || 'Verifica el formato del archivo'}`);
-                setDbStatus('error');
-              } finally {
-                if (csvInputRef.current) csvInputRef.current.value = '';
-              }
-            };
-            reader.readAsText(file);
-          }
-        }} 
-      />
-
-      {/* MODAL DE CONFIRMACIÓN DE BORRADO TOTAL */}
-      {showClearConfirm && (
-        <div className="fixed inset-0 z-[700] flex items-center justify-center p-6 animate-in fade-in duration-200">
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setShowClearConfirm(false)}></div>
-          <div className="relative bg-zinc-900 border border-zinc-800 rounded-[2.5rem] p-10 max-w-md w-full shadow-2xl animate-in zoom-in duration-300">
-            <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-6 mx-auto">
-              <AlertTriangle className="text-red-500" size={32} />
+    <div className={`min-h-screen text-zinc-100 flex flex-col ${template.fontFamily}`}>
+      {/* VENTANA DE NOTIFICACIÓN DE BORRADO */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-[500] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[2rem] max-w-sm w-full space-y-6 shadow-2xl">
+            <h3 className="text-xl font-black uppercase tracking-tighter text-white">¿Borrar Historial?</h3>
+            <p className="text-zinc-400 text-sm font-bold">Esta acción eliminará TODOS los registros de inventario de forma permanente.</p>
+            <div className="flex gap-4">
+              <button onClick={() => setShowDeleteConfirm(false)} className="flex-1 py-4 rounded-xl bg-zinc-800 text-white font-black uppercase text-[10px] hover:bg-zinc-700 transition-colors">Cancelar</button>
+              <button onClick={handleDeleteAll} className="flex-1 py-4 rounded-xl bg-red-600 text-white font-black uppercase text-[10px] hover:bg-red-500 transition-colors shadow-lg">Eliminar Todo</button>
             </div>
-            <h2 className="text-2xl font-black text-white text-center uppercase tracking-tighter mb-4">¿Vaciar Toda la Nube?</h2>
-            <p className="text-zinc-400 text-center font-bold text-sm leading-relaxed mb-8">
-              Esta acción es <span className="text-red-500">irreversible</span>. Se eliminarán permanentemente todos los registros almacenados en el inventario de la nube.
-            </p>
-            <div className="flex flex-col gap-3">
-              <button 
-                onClick={handleClearDatabase}
-                className="w-full py-4 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest transition-all shadow-xl"
-              >
-                ELIMINAR TODO EL REGISTRO
-              </button>
-              <button 
-                onClick={() => setShowClearConfirm(false)}
-                className="w-full py-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-2xl font-black uppercase text-[10px] tracking-widest transition-all"
-              >
-                CANCELAR
-              </button>
-            </div>
-            <button 
-              onClick={() => setShowClearConfirm(false)}
-              className="absolute top-6 right-6 text-zinc-600 hover:text-white transition-colors"
-            >
-              <X size={24} />
-            </button>
           </div>
         </div>
       )}
 
-      {/* MODAL DE CONFIRMACIÓN DE BORRADO SELECCIONADO */}
-      {showDeleteSelectedConfirm && (
-        <div className="fixed inset-0 z-[700] flex items-center justify-center p-6 animate-in fade-in duration-200">
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setShowDeleteSelectedConfirm(false)}></div>
-          <div className="relative bg-zinc-900 border border-zinc-800 rounded-[2.5rem] p-10 max-w-md w-full shadow-2xl animate-in zoom-in duration-300">
-            <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-6 mx-auto">
-              <Trash2 className="text-red-500" size={32} />
+      {/* AREA DE IMPRESION OCULTA */}
+      <div id="print-area" className="hidden fixed top-0 left-0" style={{ zIndex: -100 }}>
+        {Array.from({ length: totalPages }).map((_, pIdx) => (
+          <div key={pIdx} className="print-page bg-white p-[1.5mm] grid gap-[1.5mm] box-border" style={printPageStyle}>
+            {organizedPrintingData.slice(pIdx * baseCapacity, pIdx * baseCapacity + baseCapacity).map((prod, i) => (
+              <div key={prod?.id || `empty-${i}`} className="w-full h-full overflow-hidden">
+                {prod && <PrintableLabel product={prod} template={template} isMiniMode={template.paperSize !== 'LETTER'} />}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+
+      <input type="file" ref={csvInputRef} className="hidden" accept=".csv" onChange={handleUploadCSV} />
+
+      {/* MODAL PREVISUALIZACION */}
+      {showPreview && (
+        <div className="fixed inset-0 z-[400] bg-zinc-950 flex flex-col items-center justify-center p-6 backdrop-blur-2xl">
+          <div className="w-full max-w-6xl h-full flex flex-col overflow-hidden">
+            <div className="flex justify-between items-center mb-6">
+              <div className="flex items-center gap-4">
+                <Printer className="text-blue-500" />
+                <h3 className="text-2xl font-black uppercase tracking-tighter">PREVISUALIZACIÓN DE LOTE</h3>
+              </div>
+              <button onClick={() => setShowPreview(false)} className="bg-white/5 p-3 rounded-full hover:bg-white/10 transition-colors"><X /></button>
             </div>
-            <h2 className="text-2xl font-black text-white text-center uppercase tracking-tighter mb-4">Borrar Marcados</h2>
-            <p className="text-zinc-400 text-center font-bold text-sm leading-relaxed mb-8">
-              Estás a punto de eliminar <span className="text-white font-black">{selectedIds.size} elementos</span> seleccionados de la nube. ¿Deseas continuar?
-            </p>
-            <div className="flex flex-col gap-3">
-              <button 
-                onClick={handleDeleteSelected}
-                className="w-full py-4 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest transition-all shadow-xl"
-              >
-                ELIMINAR SELECCIONADOS
-              </button>
-              <button 
-                onClick={() => setShowDeleteSelectedConfirm(false)}
-                className="w-full py-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-2xl font-black uppercase text-[10px] tracking-widest transition-all"
-              >
-                CANCELAR
+            <div className="flex-1 bg-zinc-900/50 rounded-[3rem] border border-white/5 flex items-center justify-center relative overflow-hidden p-4">
+              <div className="flex items-center justify-center w-full h-full overflow-y-auto custom-scrollbar">
+                <div className="bg-white grid p-[1.5mm] gap-[1.5mm] shadow-2xl overflow-hidden transform scale-[0.4] sm:scale-[0.5] md:scale-[0.6] lg:scale-[0.7]" style={printPageStyle}>
+                  {organizedPrintingData.slice(previewPage * baseCapacity, previewPage * baseCapacity + baseCapacity).map((prod, i) => (
+                    <div key={prod?.id || `prev-${i}`} className="w-full h-full">
+                      {prod && <PrintableLabel product={prod} template={template} isMiniMode={template.paperSize !== 'LETTER'} />}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {totalPages > 1 && (
+                <div className="absolute inset-x-8 top-1/2 -translate-y-1/2 flex justify-between pointer-events-none w-full px-4">
+                  <button disabled={previewPage===0} onClick={()=>setPreviewPage(p=>p-1)} className="pointer-events-auto p-5 bg-black/60 rounded-full disabled:opacity-20 hover:bg-black/90 text-white"><ChevronLeft size={40}/></button>
+                  <button disabled={previewPage===totalPages-1} onClick={()=>setPreviewPage(p=>p+1)} className="pointer-events-auto p-5 bg-black/60 rounded-full disabled:opacity-20 hover:bg-black/90 text-white"><ChevronRight size={40}/></button>
+                </div>
+              )}
+            </div>
+            <div className="mt-8 flex gap-4">
+              <button onClick={handleExportBatch} className="flex-1 bg-blue-600 py-6 rounded-2xl font-black uppercase text-xs flex items-center justify-center gap-4 hover:bg-blue-500 transition-all shadow-xl">
+                <Download size={20} /> GENERAR LOTE FINAL
               </button>
             </div>
-            <button 
-              onClick={() => setShowDeleteSelectedConfirm(false)}
-              className="absolute top-6 right-6 text-zinc-600 hover:text-white transition-colors"
-            >
-              <X size={24} />
-            </button>
           </div>
         </div>
       )}
 
       {exportProgress && (
-        <div className="fixed inset-0 z-[600] bg-black/95 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-center">
-          <Loader2 className="text-blue-500 animate-spin mb-8" size={64} />
-          <h2 className="text-4xl font-black uppercase mb-2">Generando Hojas</h2>
-          <p className="text-zinc-500 font-bold">Hoja {exportProgress.current} de {exportProgress.total}</p>
+        <div className="fixed inset-0 z-[600] bg-black/80 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center">
+          <Loader2 className="text-blue-500 animate-spin mb-6" size={64} />
+          <h2 className="text-2xl font-black uppercase tracking-tighter">Exportando {exportProgress.current} de {exportProgress.total}</h2>
+          <p className="text-zinc-500 mt-2 font-bold">Por favor, no cierres la ventana</p>
         </div>
       )}
 
-      <div className="flex-1 flex flex-col items-center p-6 md:p-12 lg:p-16 max-w-[1700px] mx-auto w-full gap-8">
+      <div className="flex-1 flex flex-col items-center p-6 md:p-12 lg:p-20 max-w-[1700px] mx-auto w-full gap-10">
         <header className="w-full flex justify-between items-center">
           <div className="flex items-center gap-6">
-            <div className="w-16 h-16 bg-blue-600 rounded-[1.5rem] flex items-center justify-center shadow-2xl rotate-3 transition-transform hover:rotate-0 cursor-pointer">
-              <QrCodeIcon className="text-white" size={32} />
-            </div>
+            <div className="w-20 h-20 bg-blue-600 rounded-[2rem] flex items-center justify-center shadow-2xl rotate-3"><QrCodeIcon className="text-white" size={40} /></div>
             <div>
-              <h1 className="text-4xl font-black text-white uppercase tracking-tighter">CV <span className="text-blue-600">DIRECTO</span></h1>
-              <p className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest">CONTROL DE INVENTARIO INDUSTRIAL</p>
+              <h1 className="text-5xl font-black text-white uppercase tracking-tighter">CV <span className="text-blue-600">DIRECTO</span></h1>
+              <p className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest mt-1">INDUSTRIAL LABELING CONSOLE</p>
             </div>
-          </div>
-          <div className="flex items-center gap-3">
-            {dbStatus === 'syncing' && <span className="text-[8px] font-black text-blue-500 uppercase animate-pulse">Sincronizando...</span>}
-            {dbStatus === 'connected' && <CheckCircle2 className="text-emerald-500" size={16}/>}
           </div>
         </header>
 
-        <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-10">
-          <div className="lg:col-span-6 flex flex-col gap-6">
-            <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-[2.5rem] overflow-hidden backdrop-blur-xl shadow-2xl flex flex-col min-h-[680px]">
-              <nav className="flex bg-black/40 border-b border-zinc-800/60 p-3 gap-2">
-                {[
-                  { id: 'content', label: 'Captura', icon: ClipboardList },
-                  { id: 'database', label: 'Nube', icon: Database },
-                  { id: 'design', label: 'Estilo', icon: Palette },
-                ].map(tab => (
-                  <button key={tab.id} onClick={() => setActiveTab(tab.id as any)}
-                    className={`flex items-center gap-3 px-6 py-4 text-[10px] font-black uppercase rounded-2xl transition-all ${activeTab === tab.id ? 'bg-blue-600 text-white shadow-xl' : 'text-zinc-500 hover:bg-white/5'}`}>
-                    <tab.icon size={16} /> <span>{tab.label}</span>
-                  </button>
+        <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-12">
+          <div className="lg:col-span-7 flex flex-col gap-8">
+            <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-[3rem] overflow-hidden backdrop-blur-xl shadow-2xl flex flex-col min-h-[720px]">
+              <nav className="flex bg-black/40 border-b border-zinc-800/60 p-3 gap-2 overflow-x-auto">
+                {[{ id: 'content', label: 'Captura', icon: ClipboardList }, { id: 'database', label: 'Historial', icon: Database }, { id: 'layout', label: 'Layout', icon: LayoutGrid }, { id: 'design', label: 'Diseño', icon: Palette }].map(tab => (
+                  <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`flex items-center gap-3 px-8 py-4 text-[11px] font-black uppercase rounded-2xl transition-all ${activeTab === tab.id ? 'bg-blue-600 text-white shadow-xl' : 'text-zinc-500 hover:bg-white/5'}`}><tab.icon size={18} /><span>{tab.label}</span></button>
                 ))}
               </nav>
 
-              <div className="p-8 flex-1 overflow-y-auto">
+              <div className="p-10 flex-1 overflow-y-auto custom-scrollbar">
                 {activeTab === 'content' && (
-                  <div className="space-y-6 animate-in fade-in">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <label className="text-[9px] font-black text-zinc-500 uppercase">SKU</label>
-                        <input type="text" value={inventory.sku} onChange={e => setInventory({...inventory, sku: e.target.value.toUpperCase()})}
-                          className="w-full bg-zinc-950 border border-zinc-800 p-5 rounded-xl font-mono text-xl outline-none focus:border-blue-500 transition-colors" placeholder="SKU" />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[9px] font-black text-zinc-500 uppercase">Cantidad</label>
-                        <input type="number" value={inventory.pieces} onChange={e => setInventory({...inventory, pieces: parseInt(e.target.value) || 0})}
-                          className="w-full bg-zinc-950 border border-zinc-800 p-5 rounded-xl text-xl font-black outline-none focus:border-blue-500 transition-colors" />
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-[9px] font-black text-zinc-500 uppercase">Descripción</label>
-                      <input type="text" value={inventory.description} onChange={e => setInventory({...inventory, description: e.target.value.toUpperCase()})}
-                        className="w-full bg-zinc-950 border border-zinc-800 p-5 rounded-xl text-lg font-black outline-none focus:border-blue-500 transition-colors" placeholder="Descripción" />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-[9px] font-black text-zinc-500 uppercase">Subinventario</label>
-                      <input type="text" value={inventory.subinventario} onChange={e => setInventory({...inventory, subinventario: e.target.value.toUpperCase()})}
-                        className="w-full bg-zinc-950 border border-zinc-800 p-5 rounded-xl text-lg font-bold outline-none focus:border-blue-500 transition-colors" placeholder="Subinventario" />
-                    </div>
-                    <button onClick={handleAddProduct} disabled={!inventory.sku || dbStatus === 'syncing'} 
-                      className="w-full py-6 rounded-2xl font-black uppercase text-xs flex items-center justify-center gap-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-800 text-white shadow-xl transition-all active:scale-95">
-                      {dbStatus === 'syncing' ? <Loader2 className="animate-spin" size={24}/> : <Plus size={24} />} Guardar en Nube
-                    </button>
+                  <div className="animate-in fade-in duration-300 space-y-8">
+                    <div className="space-y-4"><label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">SKU PRINCIPAL</label><div className="flex gap-4"><input type="text" value={inventory.sku} onChange={e => setInventory({...inventory, sku: e.target.value.toUpperCase()})} className="flex-1 bg-zinc-950 border border-zinc-800 p-6 rounded-[1.5rem] font-mono text-2xl outline-none" placeholder="ID-000" /><button onClick={() => setIsScanning(true)} className="bg-zinc-800 hover:bg-zinc-700 text-white p-6 rounded-[1.5rem] transition-all shadow-xl"><Scan size={28} /></button></div></div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6"><div className="space-y-4"><label className="text-[10px] font-black text-zinc-500 uppercase">Localizador</label><input type="text" value={inventory.localizador} onChange={e => setInventory({...inventory, localizador: e.target.value.toUpperCase()})} className="w-full bg-zinc-950 border border-zinc-800 p-6 rounded-[1.5rem] text-xl font-black outline-none" placeholder="A-1-1" /></div><div className="space-y-4"><label className="text-[10px] font-black text-zinc-500 uppercase">Cantidad</label><input type="number" value={inventory.pieces} onChange={e => setInventory({...inventory, pieces: parseInt(e.target.value) || 0})} className="w-full bg-zinc-950 border border-zinc-800 p-6 rounded-[1.5rem] text-xl font-black outline-none" /></div></div>
+                    <button onClick={handleAddProduct} disabled={!inventory.sku} className={`w-full py-8 rounded-[2rem] font-black uppercase text-xs flex items-center justify-center gap-4 transition-all shadow-xl ${!inventory.sku ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}><Plus size={28} /> AGREGAR A LISTA</button>
                   </div>
                 )}
 
                 {activeTab === 'database' && (
-                  <div className="space-y-6 animate-in fade-in">
-                    <div className="flex gap-2">
-                      <div className="relative flex-1">
-                        <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-zinc-600" size={18} />
-                        <input type="text" placeholder="BUSCAR SKU..." value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 p-5 pl-14 rounded-xl text-xs font-black uppercase outline-none focus:border-blue-500 transition-colors" />
+                  <div className="animate-in fade-in duration-300 space-y-6">
+                    <div className="flex flex-col md:flex-row gap-4">
+                      <div className="relative flex-1"><Search className="absolute left-6 top-1/2 -translate-y-1/2 text-zinc-600" size={20} /><input type="text" placeholder="BUSCAR SKU..." value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 p-6 pl-16 rounded-[1.5rem] text-xs font-black uppercase outline-none" /></div>
+                      <div className="flex items-center gap-2 bg-zinc-950 p-4 rounded-[1.5rem] border border-zinc-800 overflow-x-auto custom-scrollbar">
+                        {ZONES.map(z => <button key={z} onClick={() => setSelectedZone(z)} className={`px-4 py-2 rounded-lg text-[10px] font-black transition-colors ${selectedZone === z ? 'bg-blue-600 text-white' : 'text-zinc-500 hover:text-white'}`}>{z}</button>)}
                       </div>
-                      <button onClick={downloadCSVTemplate} className="p-5 bg-zinc-950 border border-zinc-800 rounded-xl text-zinc-400 hover:text-blue-500 hover:border-blue-500 transition-all" title="Descargar Plantilla CSV">
-                        <FileSpreadsheet size={18}/>
-                      </button>
-                      <button onClick={() => csvInputRef.current?.click()} className="p-5 bg-zinc-950 border border-zinc-800 rounded-xl text-zinc-400 hover:text-blue-500 hover:border-blue-500 transition-all" title="Importar CSV">
-                        <UploadCloud size={18}/>
-                      </button>
-                      <button onClick={() => setShowClearConfirm(true)} className="p-5 bg-zinc-950 border border-zinc-800 rounded-xl text-zinc-400 hover:text-red-500 hover:border-red-500 transition-all" title="Vaciar Toda la Nube">
-                        <Trash2 size={18}/>
-                      </button>
                     </div>
-
-                    <div className={`p-5 rounded-xl flex items-center justify-between transition-all ${selectedIds.size > 0 ? 'bg-blue-600 text-white shadow-lg' : 'bg-zinc-950/40 text-zinc-600 border border-zinc-800/40'}`}>
-                      <div className="flex items-center gap-3">
-                        <button onClick={() => {
-                          if (selectedIds.size === filteredProducts.length) setSelectedIds(new Set());
-                          else setSelectedIds(new Set(filteredProducts.map(p => p.id)));
-                        }}>
-                          {selectedIds.size === filteredProducts.length && filteredProducts.length > 0 ? <CheckSquare size={18}/> : <Square size={18}/>}
+                    
+                    <div className="grid grid-cols-3 gap-4">
+                        <button onClick={() => csvInputRef.current?.click()} className="flex items-center justify-center gap-3 bg-zinc-800 hover:bg-zinc-700 text-white py-4 rounded-2xl text-[10px] font-black uppercase transition-all">
+                            <UploadCloud size={18} /> SUBIR TEMPLATE
                         </button>
-                        <p className="text-[9px] font-black uppercase tracking-widest">{selectedIds.size} Marcados</p>
-                      </div>
-                      {selectedIds.size > 0 && (
-                        <div className="flex gap-2">
-                          <button onClick={() => setShowDeleteSelectedConfirm(true)} className="p-2 bg-red-500 hover:bg-red-400 rounded-lg text-white transition-colors flex items-center justify-center active:scale-95" title="Eliminar Seleccionados">
-                            <Trash2 size={16} />
-                          </button>
-                          <button onClick={handleBatchDownload} className="px-5 py-2.5 bg-white text-blue-600 rounded-lg text-[9px] font-black uppercase flex items-center gap-2 hover:bg-zinc-100 transition-colors active:scale-95">
-                             <Download size={14} /> Descargar Lote
-                          </button>
-                        </div>
-                      )}
+                        <button onClick={handleDownloadTemplate} className="flex items-center justify-center gap-3 bg-zinc-800 hover:bg-zinc-700 text-white py-4 rounded-2xl text-[10px] font-black uppercase transition-all">
+                            <Download size={18} /> DESCARGAR TEMPLATE
+                        </button>
+                        <button onClick={() => setShowDeleteConfirm(true)} className="flex items-center justify-center gap-3 bg-red-900/20 hover:bg-red-900/40 text-red-500 border border-red-900/30 py-4 rounded-2xl text-[10px] font-black uppercase transition-all">
+                            <Trash2 size={18} /> BORRAR TODO
+                        </button>
                     </div>
 
-                    <div className="space-y-2">
-                      {filteredProducts.length === 0 ? (
-                        <div className="py-20 text-center flex flex-col items-center gap-4 text-zinc-700">
-                           <Database size={48} opacity={0.2} />
-                           <p className="text-[10px] font-black uppercase">Sin registros en la nube</p>
-                        </div>
-                      ) : (
-                        filteredProducts.map(prod => (
-                          <div key={prod.id} 
-                            onClick={() => {
-                              const n = new Set(selectedIds);
-                              if (n.has(prod.id)) n.delete(prod.id); else n.add(prod.id);
-                              setSelectedIds(n);
-                            }}
-                            className={`p-4 rounded-xl flex items-center gap-4 cursor-pointer border transition-all ${selectedIds.has(prod.id) ? 'bg-blue-600/10 border-blue-600' : 'bg-zinc-950 border-zinc-800 hover:border-zinc-700'}`}>
-                            {selectedIds.has(prod.id) ? <CheckSquare className="text-blue-500" size={20}/> : <Square className="text-zinc-700" size={20}/>}
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs font-black uppercase truncate tracking-tight">{prod.sku}</p>
-                              <p className="text-[9px] text-zinc-500 uppercase truncate">{prod.description}</p>
+                    <div className="space-y-4">
+                      {products.map(prod => {
+                        const parts = (prod.localizador || '').split('-');
+                        const currentRC = `${parts[0]}-${parts[1]}`;
+                        const showDivider = currentRC !== lastRC_H;
+                        lastRC_H = currentRC;
+                        return (
+                          <React.Fragment key={prod.id}>
+                            {showDivider && (
+                              <div className="flex items-center gap-4 pt-4">
+                                <span className="bg-zinc-800 text-zinc-500 px-3 py-1 rounded-full text-[9px] font-black uppercase">RACK {parts[0]} · COL {parts[1]}</span>
+                                <div className="flex-1 h-[1px] bg-zinc-800/50"></div>
+                              </div>
+                            )}
+                            <CatalogItem 
+                              prod={prod} 
+                              isSelected={selectedItems.has(prod.id)} 
+                              onToggle={handleToggleItem} 
+                              onSelect={(p: any)=>{setInventory(p);setActiveTab('content');}} 
+                              onDelete={(id: string)=>supabase.from('inventory').delete().eq('id',id).then(()=>fetchInventoryDataOnDemand())} 
+                            />
+                          </React.Fragment>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === 'layout' && (
+                  <div className="animate-in fade-in duration-300 space-y-6">
+                    <div className="grid grid-cols-2 gap-4">
+                      <select value={layoutFilterRack} onChange={e=>setLayoutFilterRack(e.target.value)} className="bg-zinc-950 border border-zinc-800 p-4 rounded-xl text-xs font-black uppercase text-white outline-none">
+                        <option value="TODOS">TODOS LOS RACKS</option>
+                        {ZONES.slice(1).map(r => <option key={r} value={r}>RACK {r}</option>)}
+                      </select>
+                      <select value={layoutFilterColumn} onChange={e=>setLayoutFilterColumn(e.target.value)} className="bg-zinc-950 border border-zinc-800 p-4 rounded-xl text-xs font-black uppercase text-white outline-none">
+                        <option value="TODOS">TODAS</option>
+                        {Array.from({length:25}).map((_,i)=><option key={i+1} value={String(i+1)}>{i+1}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-6">
+                      {layoutItems.map(item => {
+                        const parts = (item.localizador || '').split('-');
+                        const currentRC = `${parts[0]}-${parts[1]}`;
+                        const showDivider = currentRC !== lastRC_L;
+                        lastRC_L = currentRC;
+                        return (
+                          <React.Fragment key={item.id}>
+                            {showDivider && (
+                              <div className="flex items-center gap-4 pt-2">
+                                <h4 className="text-[10px] font-black text-blue-500 uppercase tracking-widest">RACK {parts[0]} · COL {parts[1]}</h4>
+                                <div className="flex-1 h-[1px] bg-blue-500/10"></div>
+                              </div>
+                            )}
+                            <div className="bg-zinc-950 border border-zinc-800 p-5 rounded-2xl flex items-center justify-between hover:border-zinc-700 transition-colors group">
+                                <div><p className="text-sm font-black text-white group-hover:text-blue-400 transition-colors">{item.localizador}</p><span className="text-[9px] font-bold text-zinc-600 uppercase">{item.zone || 'PASILLO'}</span></div>
+                                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
                             </div>
-                            <button 
-                              onClick={async (e) => { 
-                                e.stopPropagation(); 
-                                if(window.confirm(`¿Eliminar el registro ${prod.sku} permanentemente de la nube?`)) { 
-                                  await supabase.from('inventory').delete().eq('id', prod.id); 
-                                  fetchProducts(); 
-                                } 
-                              }} 
-                              className="text-zinc-800 hover:text-red-500 transition-colors p-2"
-                              title="Eliminar este registro"
-                            >
-                               <Trash2 size={18} />
-                            </button>
-                          </div>
-                        ))
-                      )}
+                          </React.Fragment>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
 
                 {activeTab === 'design' && (
-                  <div className="space-y-8 animate-in fade-in">
-                    <div className="space-y-4">
-                      <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Formato de Hoja</label>
-                      <div className="grid grid-cols-2 gap-4">
-                         {[1, 4].map(num => (
-                           <button key={num} onClick={() => setTemplate({...template, qrsPerLabel: num})}
-                            className={`py-6 rounded-2xl border-2 font-black text-[10px] uppercase flex flex-col items-center gap-3 transition-all ${template.qrsPerLabel === num ? 'bg-blue-600 border-blue-400 text-white shadow-xl' : 'bg-zinc-950 border-zinc-800 text-zinc-600 hover:bg-white/5'}`}>
-                             {num === 1 ? '1 QR por Hoja' : '4 QRs (Agrupados)'}
-                           </button>
-                         ))}
+                  <div className="animate-in fade-in duration-300 space-y-10">
+                    <div className="space-y-6">
+                      <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">FORMATO DE PAPEL</label>
+                      <div className="grid grid-cols-1 gap-4">
+                        <button onClick={()=>setTemplate({...template, paperSize:'LETTER'})} className={`flex items-center gap-4 p-6 rounded-[1.5rem] border-2 ${template.paperSize==='LETTER'?'bg-blue-600 border-blue-400':'bg-zinc-950 border-zinc-800'}`}><FileText/><span className="text-xs font-black uppercase">CARTA (4 ETIQUETAS)</span></button>
+                        <button onClick={()=>setTemplate({...template, paperSize:'LABEL2'})} className={`flex items-center gap-4 p-6 rounded-[1.5rem] border-2 ${template.paperSize==='LABEL2'?'bg-blue-600 border-blue-400':'bg-zinc-950 border-zinc-800'}`}><Tag/><span className="text-xs font-black uppercase">LOGÍSTICO (12 ETIQUETAS)</span></button>
                       </div>
                     </div>
-                    <div className="space-y-6">
-                       <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest flex items-center justify-between">
-                         <span>Tamaño del QR</span>
-                         <span className="text-blue-500">{template.qrSize}px</span>
-                       </label>
-                       <input type="range" min="60" max="140" value={template.qrSize} onChange={e => setTemplate({...template, qrSize: parseInt(e.target.value)})}
-                         className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-600" />
-                    </div>
-                    
                     <div className="space-y-4">
-                       <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Personalización</label>
-                       <input type="text" value={template.headerText} onChange={e=>setTemplate({...template, headerText: e.target.value.toUpperCase()})} className="w-full bg-zinc-950 border border-zinc-800 p-5 rounded-xl outline-none text-sm font-bold focus:border-blue-500 transition-colors" placeholder="Nombre Empresa" />
-                       <button onClick={() => fileInputRef.current?.click()} className="w-full h-20 bg-zinc-950 border-2 border-dashed border-zinc-800 rounded-xl flex items-center justify-center gap-3 text-[9px] font-black text-zinc-600 uppercase hover:border-blue-500 hover:text-blue-500 transition-all">
-                         <ImagePlus size={18} /> {template.logoUrl ? 'Cambiar Logo' : 'Subir Logo Corporativo'}
-                       </button>
-                       <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={e => {
-                         const file = e.target.files?.[0];
-                         if (file) {
-                           const reader = new FileReader();
-                           reader.onloadend = () => setTemplate(prev => ({ ...prev, logoUrl: reader.result as string }));
-                           reader.readAsDataURL(file);
-                         }
-                       }} />
+                      <label className="text-[10px] font-black text-zinc-500 uppercase">Texto Cabecera</label>
+                      <input type="text" value={template.headerText} onChange={e=>setTemplate({...template, headerText: e.target.value.toUpperCase()})} className="w-full bg-zinc-950 border border-zinc-800 p-5 rounded-2xl outline-none font-black text-white" />
                     </div>
                   </div>
                 )}
@@ -603,40 +738,40 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          <div className="lg:col-span-6 flex flex-col items-center">
-            <h3 className="text-[10px] font-black uppercase text-zinc-500 tracking-widest mb-4 flex items-center gap-2 self-start">
-              <Info size={14}/> Vista Previa de Hoja {template.qrsPerLabel === 4 ? '(2x2)' : '(1x1)'}
-            </h3>
-
-            <div className="industrial-border p-6 rounded-[2.5rem] shadow-2xl bg-zinc-950/20">
-              <div 
-                ref={sheetRef} 
-                className="bg-white shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden" 
-                style={{ width: '400px', height: '540px' }}
-              >
-                <LabelSheet 
-                  products={batchProducts.length > 0 ? batchProducts : currentPreviewProducts} 
-                  template={template} 
-                />
+          <div className="lg:col-span-5 relative">
+            <div className="sticky top-10 flex flex-col items-center">
+              <div className="w-full flex justify-between items-center mb-6 px-4"><span className="text-[11px] font-black text-zinc-600 uppercase tracking-widest">VISTA DE IMPRESIÓN</span></div>
+              <div className={`shadow-2xl bg-white rounded-[2rem] overflow-hidden border border-zinc-800/50 flex items-center justify-center`} style={{ width: '100%', maxWidth: '450px', aspectRatio: template.paperSize === 'LETTER' ? '216/279' : '100/310', maxHeight: '700px' }}>
+                <div className="bg-white grid p-[1.5mm] gap-[1.5mm] origin-center pointer-events-none" style={{ ...printPageStyle, transform: template.paperSize === 'LETTER' ? 'scale(0.42)' : 'scale(0.55)' }}>
+                  {organizedPrintingData.slice(0, baseCapacity).map((prod, i) => prod ? (
+                    <div key={prod.id} className="w-full h-full overflow-hidden"><PrintableLabel product={prod} template={template} isMiniMode={template.paperSize !== 'LETTER'} /></div>
+                  ) : <div key={`e-${i}`} className="w-full h-full bg-zinc-50 border border-dashed border-zinc-200"></div>)}
+                </div>
               </div>
             </div>
-
-            <p className="mt-4 text-[9px] text-zinc-600 uppercase font-black text-center max-w-[300px]">
-              {selectedIds.size > 0 
-                ? `Mostrando ${Math.min(selectedIds.size, 4)} de ${selectedIds.size} seleccionados.`
-                : 'Previsualización de captura actual.'}
-            </p>
-
-            <button 
-              onClick={handleBatchDownload}
-              disabled={selectedIds.size === 0}
-              className="mt-8 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 text-white px-10 py-4 rounded-xl font-black text-[10px] uppercase flex items-center gap-3 transition-all shadow-xl active:scale-95"
-            >
-              <Download size={20} /> Descargar Lote Seleccionado
-            </button>
           </div>
         </div>
+
+        {/* BARRA FLOTANTE DE ACCIÓN */}
+        {selectedItems.size > 0 && !showPreview && (
+          <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[300] bg-zinc-900/95 border border-blue-500/30 px-10 py-6 rounded-[2.5rem] shadow-2xl flex items-center gap-12 backdrop-blur-2xl animate-in slide-in-from-bottom-20 duration-500">
+            <div className="flex items-center gap-4">
+              <Layers className="text-blue-500" />
+              <span className="text-white font-black text-lg uppercase">{selectedItems.size} SELECCIONADOS</span>
+            </div>
+            <div className="h-10 w-[1px] bg-white/10"></div>
+            <button onClick={() => { setPreviewPage(0); setShowPreview(true); }} className="bg-blue-600 hover:bg-blue-500 text-white px-10 py-5 rounded-[1.5rem] font-black text-[11px] uppercase tracking-widest flex items-center gap-4 transition-all shadow-xl"><Printer size={20} /> PREVISUALIZAR</button>
+            <button onClick={()=>setSelectedItems(new Map())} className="p-5 bg-zinc-800 text-zinc-500 hover:text-white rounded-2xl transition-all"><X size={20}/></button>
+          </div>
+        )}
       </div>
+
+      <style>{`
+        @keyframes scan { 0%, 100% { top: 10%; } 50% { top: 90%; } }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 10px; }
+        @media print { body { background: white !important; } #root { display: none !important; } #print-area { display: block !important; position: static !important; } .print-page { page-break-after: always; } }
+      `}</style>
     </div>
   );
 };

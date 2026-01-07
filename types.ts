@@ -6,6 +6,7 @@ export enum LabelType {
 export interface InventoryData {
   sku: string;
   description: string;
+  localizador: string;
   pieces: number;
   subinventario: string;
 }
@@ -16,7 +17,7 @@ export interface ProductRecord extends InventoryData {
 
 export type BarcodeDataMode = 'SKU_ONLY' | 'STRUCTURED';
 export type QRDataFormat = 'JSON' | 'PIPE' | 'CSV' | 'PREFIJO';
-export type PaperSize = 'LETTER';
+export type PaperSize = 'LETTER' | 'LABEL' | 'LABEL2';
 
 export interface TemplateConfig {
   headerText: string;
@@ -35,7 +36,6 @@ export interface TemplateConfig {
   barcodeMode: BarcodeDataMode;
   qrSeparator: string;
   paperSize: PaperSize;
-  qrsPerLabel: number;
 }
 
 export interface BarcodeConfig {

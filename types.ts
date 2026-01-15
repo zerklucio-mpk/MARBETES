@@ -18,6 +18,7 @@ export interface ProductRecord extends InventoryData {
 export type BarcodeDataMode = 'SKU_ONLY' | 'STRUCTURED';
 export type QRDataFormat = 'JSON' | 'PIPE' | 'CSV' | 'PREFIJO';
 export type PaperSize = 'LETTER' | 'LABEL' | 'LABEL2';
+export type ArrowDirection = 'NONE' | 'LEFT' | 'RIGHT';
 
 export interface TemplateConfig {
   headerText: string;
@@ -36,6 +37,8 @@ export interface TemplateConfig {
   barcodeMode: BarcodeDataMode;
   qrSeparator: string;
   paperSize: PaperSize;
+  arrowDirection: ArrowDirection;
+  arrowSize: number;
 }
 
 export interface BarcodeConfig {

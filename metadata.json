@@ -1,5 +1,5 @@
 {
-  "name": "SALVACION",
+  "name": "Copy of SALVACION",
   "description": "Consola industrial para la generación de marbetes y etiquetas de inventario con códigos QR, gestión de catálogo local e importación masiva.",
   "requestFramePermissions": [
     "camera"

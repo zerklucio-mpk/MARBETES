@@ -1,4 +1,3 @@
-
 /**
  * =========================================================================
  * CODIGO SQL PARA GENERAR LAS TABLAS EN SUPABASE
@@ -51,7 +50,9 @@ import {
   LayoutGrid,
   Trash,
   Layers,
-  FileSpreadsheet
+  ArrowLeft,
+  ArrowRight,
+  Minus
 } from 'lucide-react';
 import { 
   InventoryData,
@@ -65,6 +66,16 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const ZONES = ['TODOS', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
+
+// ORIENTACIÓN DE RACKS SEGÚN ESPECIFICACIÓN DEL USUARIO
+const RACK_ORIENTATION: Record<string, 'FRENTE' | 'FONDO'> = {
+  'A': 'FONDO', 'B': 'FRENTE',
+  'C': 'FRENTE', 'D': 'FONDO',
+  'E': 'FONDO', 'F': 'FRENTE',
+  'G': 'FRENTE', 'H': 'FONDO',
+  'I': 'FONDO', 'J': 'FRENTE',
+  'K': 'FRENTE', 'L': 'FONDO'
+};
 
 // MAPEO DE PAREJAS DE RACKS (PASILLOS)
 const RACK_PAIRS: Record<string, string> = {
@@ -116,6 +127,9 @@ const PrintableLabel = memo(({ product, template, isMiniMode = false }: any) => 
   const isPickingLoc = product.sku === 'PICKING';
   const isSpecial = isEmptyLoc || isPickingLoc;
   
+  const rackId = useMemo(() => (product.localizador || '').split('-')[0], [product.localizador]);
+  const orientation = useMemo(() => RACK_ORIENTATION[rackId] || 'N/A', [rackId]);
+  
   const isPickeoZone = useMemo(() => product.localizador?.toString().trim().endsWith('1'), [product.localizador]);
   
   const qrValue = useMemo(() => {
@@ -129,7 +143,7 @@ const PrintableLabel = memo(({ product, template, isMiniMode = false }: any) => 
 
   if (isMiniMode) {
     return (
-      <div className={`bg-white text-black flex flex-col h-full w-full overflow-hidden font-sans border box-border ${isSpecial ? 'border-zinc-200 opacity-60' : 'border-zinc-300'}`}>
+      <div className={`bg-white text-black flex flex-col h-full w-full overflow-hidden font-sans border box-border ${isSpecial ? 'border-zinc-200' : 'border-zinc-300'}`}>
         <div className={`${isPickingLoc ? 'bg-orange-600' : (isEmptyLoc ? 'bg-zinc-400' : 'bg-black')} text-white px-2 flex items-center justify-between shrink-0 h-[18px]`}>
           <div className="flex items-center gap-1">
             <div className="w-3 h-3 bg-red-600 rounded-full flex items-center justify-center font-black text-[5px]">CV</div>
@@ -145,15 +159,20 @@ const PrintableLabel = memo(({ product, template, isMiniMode = false }: any) => 
           
           <div className="flex-1 flex items-center justify-center w-full min-h-0 py-0.5">
             {isSpecial ? (
-              <div className={`border-2 border-dashed rounded-full w-12 h-12 flex items-center justify-center ${isPickingLoc ? 'border-orange-100' : 'border-zinc-100'}`}>
-                {isPickingLoc ? (
-                   <Scan size={16} className="text-orange-200" />
-                ) : (
-                  <>
-                    <div className="w-6 h-0.5 bg-zinc-100 rotate-45 absolute"></div>
-                    <div className="w-6 h-0.5 bg-zinc-100 -rotate-45 absolute"></div>
-                  </>
+              <div className={`flex flex-col items-center justify-start pt-1 gap-0.5 w-full h-full`}>
+                <div className={`px-2 py-0.5 rounded border border-black w-[85%] text-center ${orientation === 'FRENTE' ? 'bg-emerald-50' : 'bg-purple-50'}`}>
+                  <span className={`text-[10px] font-black uppercase tracking-tight ${orientation === 'FRENTE' ? 'text-emerald-800' : 'text-purple-800'}`}>
+                    {orientation}
+                  </span>
+                </div>
+                {template.arrowDirection !== 'NONE' && (
+                  <div className="flex items-center justify-center text-black">
+                    {template.arrowDirection === 'LEFT' ? <ArrowLeft size={template.arrowSize * 0.375} strokeWidth={3} /> : <ArrowRight size={template.arrowSize * 0.375} strokeWidth={3} />}
+                  </div>
                 )}
+                <div className="opacity-10 flex flex-col items-center mt-auto pb-1">
+                  {isPickingLoc ? <Scan size={10} className="text-orange-950" /> : <Layers size={10} className="text-zinc-950" />}
+                </div>
               </div>
             ) : (
               <QRRenderer value={qrValue} size={displayQrSize} />
@@ -162,7 +181,7 @@ const PrintableLabel = memo(({ product, template, isMiniMode = false }: any) => 
 
           <div className="w-full shrink-0 border-t border-zinc-200 pt-1 pb-1 px-1">
             <div className="flex justify-between items-baseline">
-              <p className={`text-[8px] font-black leading-none uppercase tracking-tight truncate flex-1 mr-1 ${isPickingLoc ? 'text-orange-700' : (isEmptyLoc ? 'text-zinc-300' : 'text-blue-800')}`}>
+              <p className={`text-[8px] font-black leading-none uppercase tracking-tight truncate flex-1 mr-1 ${isPickingLoc ? 'text-orange-700' : (isEmptyLoc ? 'text-zinc-500' : 'text-blue-800')}`}>
                 {product.localizador} 
                 {!isSpecial && <span className="text-zinc-400 ml-1">[{product.subinventario || 'GNR'}]</span>}
               </p>
@@ -199,7 +218,23 @@ const PrintableLabel = memo(({ product, template, isMiniMode = false }: any) => 
         <div className={`h-[2px] w-full mb-3 ${isPickingLoc ? 'bg-orange-500' : 'bg-black'}`}></div>
         <div className="flex-1 min-h-0 flex items-center justify-center py-1">
           {isSpecial ? (
-            <div className={`font-black text-5xl opacity-10 ${isPickingLoc ? 'text-orange-900' : 'text-zinc-900'}`}>{isPickingLoc ? 'PICKING' : 'VACÍO'}</div>
+            <div className="w-full h-full flex flex-col items-center justify-center relative">
+              {/* Leyenda PICKING/VACÍO posicionada más arriba */}
+              <div className={`font-black text-6xl opacity-10 absolute top-[10%] select-none ${isPickingLoc ? 'text-orange-900' : 'text-zinc-900'}`}>
+                {isPickingLoc ? 'PICKING' : 'VACÍO'}
+              </div>
+              {/* Banner de Orientación posicionado justo debajo */}
+              <div className={`z-10 w-full py-5 border-y-4 border-black text-center flex flex-col items-center justify-center transform -translate-y-2 ${orientation === 'FRENTE' ? 'bg-emerald-50' : 'bg-purple-50'}`}>
+                <p className={`text-[10px] font-black uppercase tracking-[0.3em] mb-1 ${orientation === 'FRENTE' ? 'text-emerald-900' : 'text-purple-900'}`}>ORIENTACIÓN LOGÍSTICA</p>
+                <p className={`text-6xl font-black uppercase leading-tight ${orientation === 'FRENTE' ? 'text-emerald-700' : 'text-purple-700'}`}>{orientation}</p>
+                
+                {template.arrowDirection !== 'NONE' && (
+                  <div className="mt-2 flex items-center justify-center text-black">
+                    {template.arrowDirection === 'LEFT' ? <ArrowLeft size={template.arrowSize} strokeWidth={4} /> : <ArrowRight size={template.arrowSize} strokeWidth={4} />}
+                  </div>
+                )}
+              </div>
+            </div>
           ) : (
             <QRRenderer value={qrValue} size={displayQrSize} />
           )}
@@ -219,19 +254,25 @@ const PrintableLabel = memo(({ product, template, isMiniMode = false }: any) => 
   );
 });
 
-const CatalogItem = memo(({ prod, isSelected, onToggle, onSelect, onDelete }: any) => (
-  <div className={`group border-2 rounded-2xl p-4 flex items-center gap-4 transition-all cursor-pointer ${isSelected ? 'bg-blue-600/10 border-blue-600/50' : 'bg-zinc-950/40 border-zinc-800/40 hover:border-zinc-700'}`} onClick={() => onToggle(prod)}>
-    <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${isSelected ? 'bg-blue-600 text-white shadow-lg' : 'bg-zinc-800 text-zinc-600'}`}>{isSelected ? <CheckSquare size={20} /> : <Square size={20} />}</div>
-    <div className="flex-1 min-w-0" onClick={(e) => { e.stopPropagation(); onSelect(prod); }}>
-      <p className={`text-sm font-black uppercase tracking-tight truncate ${isSelected ? 'text-blue-400' : 'text-zinc-100'}`}>{prod.sku}</p>
-      <div className="flex items-center gap-2 mt-0.5">
-        <span className="text-[8px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded font-bold uppercase">{prod.localizador}</span>
-        <span className="text-[8px] bg-blue-900/30 text-blue-400 px-1.5 py-0.5 rounded font-bold uppercase">{prod.pieces} UDS</span>
+const CatalogItem = memo(({ prod, isSelected, onToggle, onSelect, onDelete }: any) => {
+  const rack = (prod.localizador || '').split('-')[0];
+  const orientation = RACK_ORIENTATION[rack] || '---';
+
+  return (
+    <div className={`group border-2 rounded-2xl p-4 flex items-center gap-4 transition-all cursor-pointer ${isSelected ? 'bg-blue-600/10 border-blue-600/50' : 'bg-zinc-950/40 border-zinc-800/40 hover:border-zinc-700'}`} onClick={() => onToggle(prod)}>
+      <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${isSelected ? 'bg-blue-600 text-white shadow-lg' : 'bg-zinc-800 text-zinc-600'}`}>{isSelected ? <CheckSquare size={20} /> : <Square size={20} />}</div>
+      <div className="flex-1 min-w-0" onClick={(e) => { e.stopPropagation(); onSelect(prod); }}>
+        <p className={`text-sm font-black uppercase tracking-tight truncate ${isSelected ? 'text-blue-400' : 'text-zinc-100'}`}>{prod.sku}</p>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-[8px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded font-bold uppercase">{prod.localizador}</span>
+          <span className="text-[8px] bg-blue-900/30 text-blue-400 px-1.5 py-0.5 rounded font-bold uppercase">{prod.pieces} UDS</span>
+          <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold uppercase ${orientation === 'FRENTE' ? 'bg-emerald-900/30 text-emerald-400' : 'bg-purple-900/30 text-purple-400'}`}>{orientation}</span>
+        </div>
       </div>
+      <button onClick={(e) => { e.stopPropagation(); onDelete(prod.id); }} className="p-2 text-zinc-800 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all hover:bg-red-500/10 rounded-lg"><Trash2 size={18} /></button>
     </div>
-    <button onClick={(e) => { e.stopPropagation(); onDelete(prod.id); }} className="p-2 text-zinc-800 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all hover:bg-red-500/10 rounded-lg"><Trash2 size={18} /></button>
-  </div>
-));
+  );
+});
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'content' | 'database' | 'design' | 'layout'>('content');
@@ -251,14 +292,14 @@ const App: React.FC = () => {
   
   const [isFetching, setIsFetching] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const csvInputRef = useRef<HTMLInputElement>(null);
 
   const [template, setTemplate] = useState<TemplateConfig>({
     headerText: 'CVDIRECTO', headerBg: '#000000', headerTextColor: '#ffffff', accentColor: '#3b82f6',
     barcodeWidth: 160, barcodeHeight: 160, qrSize: 150, showDate: true, borderWidth: 4, borderStyle: 'solid',
-    fontFamily: 'font-sans', logoUrl: undefined, qrFormat: 'PIPE', barcodeMode: 'STRUCTURED', qrSeparator: '_', paperSize: 'LABEL2' 
+    fontFamily: 'font-sans', logoUrl: undefined, qrFormat: 'PIPE', barcodeMode: 'STRUCTURED', qrSeparator: '_', paperSize: 'LABEL2',
+    arrowDirection: 'NONE', arrowSize: 64
   });
 
   const fetchInventoryDataOnDemand = useCallback(async () => {
@@ -337,91 +378,6 @@ const App: React.FC = () => {
     } catch (e) { alert('Error en la exportación.'); } finally { printArea.style.display = 'none'; setExportProgress(null); }
   };
 
-  const handleDownloadTemplate = () => {
-    const headers = "SKU,LOCALIZADOR,PIEZA,DESCRIPTION,SUBINVENTARIO";
-    const blob = new Blob([headers], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'template_inventario_cvdirecto.csv';
-    a.click();
-    window.URL.revokeObjectURL(url);
-  };
-
-  const handleUploadCSV = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    
-    setIsFetching(true);
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const text = event.target?.result as string;
-        const lines = text.split(/\r?\n/);
-        const dataToInsert: any[] = [];
-        
-        for (let i = 1; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (!line) continue;
-          
-          const columns = line.split(',');
-          const sku = columns[0]?.trim();
-          const loc = columns[1]?.trim();
-          const pz = columns[2]?.trim();
-          const desc = columns[3]?.trim();
-          const sub = columns[4]?.trim();
-          
-          if (sku && loc) {
-            dataToInsert.push({
-              sku: sku.toUpperCase(),
-              localizador: loc.toUpperCase(),
-              pieces: parseInt(pz) || 0,
-              description: desc || '',
-              subinventario: sub || ''
-            });
-          }
-        }
-        
-        if (dataToInsert.length > 0) {
-          const { error } = await supabase.from('inventory').insert(dataToInsert);
-          if (error) {
-            alert('Error al subir datos: ' + error.message);
-          } else {
-            alert(`Se han importado ${dataToInsert.length} registros exitosamente.`);
-            fetchInventoryDataOnDemand();
-          }
-        } else {
-          alert('No se encontraron datos válidos en el archivo.');
-        }
-      } catch (err) {
-        alert('Error al procesar el archivo CSV.');
-      } finally {
-        setIsFetching(false);
-        if (csvInputRef.current) csvInputRef.current.value = '';
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const handleDeleteAll = async () => {
-    setIsFetching(true);
-    try {
-      const { error } = await supabase.from('inventory').delete().filter('id', 'not.is', null);
-      if (error) {
-        alert('Error al borrar datos: ' + error.message);
-      } else {
-        alert('Historial borrado exitosamente.');
-        fetchInventoryDataOnDemand();
-        setSelectedItems(new Map());
-      }
-    } catch (err) {
-      alert('Error al procesar la solicitud.');
-    } finally {
-      setIsFetching(false);
-      setShowDeleteConfirm(false);
-    }
-  };
-
   /**
    * LÓGICA DE ORGANIZACIÓN FRENTE Y FONDO CON RELLENO DE VACÍOS Y PICKING
    */
@@ -456,12 +412,14 @@ const App: React.FC = () => {
       const racksInAisle = PASILLO_MAP[aisle] || [aisle, aisle];
       
       for (let l = 6; l >= 1; l--) {
+        // Cara Izquierda
         const leftRack = racksInAisle[0];
         const leftProd = groups[key]?.find((p: ProductRecord) => {
           const parts = p.localizador.split('-');
           return parts[0] === leftRack && parseInt(parts[2]) === l;
         });
         
+        // REGLA: Si es Nivel 1, SIEMPRE es Picking. Si no hay producto y l > 1, es Vacío.
         if (l === 1) {
             pages.push({
                 id: `picking-${leftRack}-${col}-${l}`,
@@ -482,6 +440,7 @@ const App: React.FC = () => {
             } as ProductRecord);
         }
         
+        // Cara Derecha
         const rightRack = racksInAisle[1];
         const rightProd = groups[key]?.find((p: ProductRecord) => {
           const parts = p.localizador.split('-');
@@ -530,20 +489,6 @@ const App: React.FC = () => {
 
   return (
     <div className={`min-h-screen text-zinc-100 flex flex-col ${template.fontFamily}`}>
-      {/* VENTANA DE NOTIFICACIÓN DE BORRADO */}
-      {showDeleteConfirm && (
-        <div className="fixed inset-0 z-[500] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[2rem] max-w-sm w-full space-y-6 shadow-2xl">
-            <h3 className="text-xl font-black uppercase tracking-tighter text-white">¿Borrar Historial?</h3>
-            <p className="text-zinc-400 text-sm font-bold">Esta acción eliminará TODOS los registros de inventario de forma permanente.</p>
-            <div className="flex gap-4">
-              <button onClick={() => setShowDeleteConfirm(false)} className="flex-1 py-4 rounded-xl bg-zinc-800 text-white font-black uppercase text-[10px] hover:bg-zinc-700 transition-colors">Cancelar</button>
-              <button onClick={handleDeleteAll} className="flex-1 py-4 rounded-xl bg-red-600 text-white font-black uppercase text-[10px] hover:bg-red-500 transition-colors shadow-lg">Eliminar Todo</button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* AREA DE IMPRESION OCULTA */}
       <div id="print-area" className="hidden fixed top-0 left-0" style={{ zIndex: -100 }}>
         {Array.from({ length: totalPages }).map((_, pIdx) => (
@@ -556,8 +501,6 @@ const App: React.FC = () => {
           </div>
         ))}
       </div>
-
-      <input type="file" ref={csvInputRef} className="hidden" accept=".csv" onChange={handleUploadCSV} />
 
       {/* MODAL PREVISUALIZACION */}
       {showPreview && (
@@ -641,30 +584,23 @@ const App: React.FC = () => {
                         {ZONES.map(z => <button key={z} onClick={() => setSelectedZone(z)} className={`px-4 py-2 rounded-lg text-[10px] font-black transition-colors ${selectedZone === z ? 'bg-blue-600 text-white' : 'text-zinc-500 hover:text-white'}`}>{z}</button>)}
                       </div>
                     </div>
-                    
-                    <div className="grid grid-cols-3 gap-4">
-                        <button onClick={() => csvInputRef.current?.click()} className="flex items-center justify-center gap-3 bg-zinc-800 hover:bg-zinc-700 text-white py-4 rounded-2xl text-[10px] font-black uppercase transition-all">
-                            <UploadCloud size={18} /> SUBIR TEMPLATE
-                        </button>
-                        <button onClick={handleDownloadTemplate} className="flex items-center justify-center gap-3 bg-zinc-800 hover:bg-zinc-700 text-white py-4 rounded-2xl text-[10px] font-black uppercase transition-all">
-                            <Download size={18} /> DESCARGAR TEMPLATE
-                        </button>
-                        <button onClick={() => setShowDeleteConfirm(true)} className="flex items-center justify-center gap-3 bg-red-900/20 hover:bg-red-900/40 text-red-500 border border-red-900/30 py-4 rounded-2xl text-[10px] font-black uppercase transition-all">
-                            <Trash2 size={18} /> BORRAR TODO
-                        </button>
-                    </div>
-
                     <div className="space-y-4">
                       {products.map(prod => {
                         const parts = (prod.localizador || '').split('-');
+                        const rack = parts[0] || 'Z';
                         const currentRC = `${parts[0]}-${parts[1]}`;
                         const showDivider = currentRC !== lastRC_H;
                         lastRC_H = currentRC;
+                        const orientation = RACK_ORIENTATION[rack] || '---';
+
                         return (
                           <React.Fragment key={prod.id}>
                             {showDivider && (
                               <div className="flex items-center gap-4 pt-4">
-                                <span className="bg-zinc-800 text-zinc-500 px-3 py-1 rounded-full text-[9px] font-black uppercase">RACK {parts[0]} · COL {parts[1]}</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="bg-zinc-800 text-zinc-500 px-3 py-1 rounded-full text-[9px] font-black uppercase">RACK {parts[0]} · COL {parts[1]}</span>
+                                  <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase ${orientation === 'FRENTE' ? 'bg-emerald-600/20 text-emerald-400' : 'bg-purple-600/20 text-purple-400'}`}>{orientation}</span>
+                                </div>
                                 <div className="flex-1 h-[1px] bg-zinc-800/50"></div>
                               </div>
                             )}
@@ -697,19 +633,31 @@ const App: React.FC = () => {
                     <div className="space-y-6">
                       {layoutItems.map(item => {
                         const parts = (item.localizador || '').split('-');
+                        const rack = parts[0] || 'Z';
                         const currentRC = `${parts[0]}-${parts[1]}`;
                         const showDivider = currentRC !== lastRC_L;
                         lastRC_L = currentRC;
+                        const orientation = RACK_ORIENTATION[rack] || '---';
+
                         return (
                           <React.Fragment key={item.id}>
                             {showDivider && (
                               <div className="flex items-center gap-4 pt-2">
-                                <h4 className="text-[10px] font-black text-blue-500 uppercase tracking-widest">RACK {parts[0]} · COL {parts[1]}</h4>
+                                <div className="flex items-center gap-3">
+                                  <h4 className="text-[10px] font-black text-blue-500 uppercase tracking-widest">RACK {parts[0]} · COL {parts[1]}</h4>
+                                  <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${orientation === 'FRENTE' ? 'bg-emerald-600/10 text-emerald-400' : 'bg-purple-600/10 text-purple-400'}`}>{orientation}</span>
+                                </div>
                                 <div className="flex-1 h-[1px] bg-blue-500/10"></div>
                               </div>
                             )}
                             <div className="bg-zinc-950 border border-zinc-800 p-5 rounded-2xl flex items-center justify-between hover:border-zinc-700 transition-colors group">
-                                <div><p className="text-sm font-black text-white group-hover:text-blue-400 transition-colors">{item.localizador}</p><span className="text-[9px] font-bold text-zinc-600 uppercase">{item.zone || 'PASILLO'}</span></div>
+                                <div className="flex flex-col">
+                                  <p className="text-sm font-black text-white group-hover:text-blue-400 transition-colors">{item.localizador}</p>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[9px] font-bold text-zinc-600 uppercase">{item.zone || 'PASILLO'}</span>
+                                    <span className={`text-[7px] font-black px-1 rounded-sm ${orientation === 'FRENTE' ? 'bg-emerald-950 text-emerald-500' : 'bg-purple-950 text-purple-500'}`}>{orientation}</span>
+                                  </div>
+                                </div>
                                 <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
                             </div>
                           </React.Fragment>
@@ -728,6 +676,41 @@ const App: React.FC = () => {
                         <button onClick={()=>setTemplate({...template, paperSize:'LABEL2'})} className={`flex items-center gap-4 p-6 rounded-[1.5rem] border-2 ${template.paperSize==='LABEL2'?'bg-blue-600 border-blue-400':'bg-zinc-950 border-zinc-800'}`}><Tag/><span className="text-xs font-black uppercase">LOGÍSTICO (12 ETIQUETAS)</span></button>
                       </div>
                     </div>
+
+                    <div className="space-y-6">
+                      <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">INDICADOR DIRECCIONAL (Especiales)</label>
+                      <div className="grid grid-cols-3 gap-3">
+                        <button onClick={()=>setTemplate({...template, arrowDirection:'NONE'})} className={`flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border-2 transition-all ${template.arrowDirection==='NONE'?'bg-blue-600 border-blue-400 text-white':'bg-zinc-950 border-zinc-800 text-zinc-500 hover:border-zinc-700'}`}>
+                          <Minus size={24} />
+                          <span className="text-[9px] font-black uppercase">SIN FLECHA</span>
+                        </button>
+                        <button onClick={()=>setTemplate({...template, arrowDirection:'LEFT'})} className={`flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border-2 transition-all ${template.arrowDirection==='LEFT'?'bg-blue-600 border-blue-400 text-white':'bg-zinc-950 border-zinc-800 text-zinc-500 hover:border-zinc-700'}`}>
+                          <ArrowLeft size={24} />
+                          <span className="text-[9px] font-black uppercase">IZQUIERDA</span>
+                        </button>
+                        <button onClick={()=>setTemplate({...template, arrowDirection:'RIGHT'})} className={`flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border-2 transition-all ${template.arrowDirection==='RIGHT'?'bg-blue-600 border-blue-400 text-white':'bg-zinc-950 border-zinc-800 text-zinc-500 hover:border-zinc-700'}`}>
+                          <ArrowRight size={24} />
+                          <span className="text-[9px] font-black uppercase">DERECHA</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-6">
+                      <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">TAMAÑO DE FLECHA</label>
+                      <div className="flex items-center gap-6 bg-zinc-950 border border-zinc-800 p-6 rounded-[1.5rem]">
+                        <input 
+                          type="range" 
+                          min="20" 
+                          max="150" 
+                          step="1"
+                          value={template.arrowSize} 
+                          onChange={e => setTemplate({...template, arrowSize: parseInt(e.target.value)})} 
+                          className="flex-1 h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                        />
+                        <span className="text-xl font-black text-blue-500 w-20 text-right">{template.arrowSize}px</span>
+                      </div>
+                    </div>
+
                     <div className="space-y-4">
                       <label className="text-[10px] font-black text-zinc-500 uppercase">Texto Cabecera</label>
                       <input type="text" value={template.headerText} onChange={e=>setTemplate({...template, headerText: e.target.value.toUpperCase()})} className="w-full bg-zinc-950 border border-zinc-800 p-5 rounded-2xl outline-none font-black text-white" />

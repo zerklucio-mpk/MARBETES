@@ -1,3 +1,4 @@
+
 /**
  * =========================================================================
  * CODIGO SQL PARA GENERAR LAS TABLAS EN SUPABASE
@@ -52,7 +53,9 @@ import {
   Layers,
   ArrowLeft,
   ArrowRight,
-  Minus
+  Minus,
+  AlertTriangle,
+  Info
 } from 'lucide-react';
 import { 
   InventoryData,
@@ -277,6 +280,8 @@ const CatalogItem = memo(({ prod, isSelected, onToggle, onSelect, onDelete }: an
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'content' | 'database' | 'design' | 'layout'>('content');
   const [showPreview, setShowPreview] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showUploadRules, setShowUploadRules] = useState(false);
   const [exportProgress, setExportProgress] = useState<{current: number, total: number} | null>(null);
   const [previewPage, setPreviewPage] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
@@ -357,6 +362,155 @@ const App: React.FC = () => {
       fetchInventoryDataOnDemand();
       setInventory({ sku: '', description: '', localizador: '', pieces: 0, subinventario: '' });
       alert('Guardado.');
+    }
+  };
+
+  /**
+   * EXPORTACIÓN DE CSV RESPETANDO EL ORDEN: SKU, LOCALIZADOR, PIEZAS, DESCRIPTION, SUBINVENTARIO
+   */
+  const handleExportCSV = async () => {
+    try {
+      const { data, error } = await supabase.from('inventory').select('*');
+      if (error || !data) throw error;
+
+      // Orden solicitado por el usuario
+      const csvHeaders = ['SKU', 'LOCALIZADOR', 'PIEZAS', 'DESCRIPTION', 'SUBINVENTARIO'];
+      const dbFieldsMapping = ['sku', 'localizador', 'pieces', 'description', 'subinventario'];
+      
+      const csvContent = [
+        csvHeaders.join(','),
+        ...data.map((row: any) => dbFieldsMapping.map(field => `"${row[field] || ''}"`).join(','))
+      ].join('\n');
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.setAttribute('download', `INVENTARIO_CVDIRECTO_${new Date().toISOString().split('T')[0]}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      alert('Error al exportar catálogo');
+    }
+  };
+
+  /**
+   * IMPORTACIÓN DE CSV BASADA EN EL ORDEN: SKU, LOCALIZADOR, PIEZAS, DESCRIPTION, SUBINVENTARIO
+   * INCLUYE ALGORITMO DE VALIDACIÓN EXHAUSTIVA Y DETECCIÓN DE PATRONES (SIN IA)
+   */
+  const handleImportCSV = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const text = event.target?.result as string;
+      const lines = text.split('\n');
+      const validationErrors: string[] = [];
+      
+      // Patrones de validación (ADN de los datos)
+      const localizadorRegex = /^[A-L]-[0-9]+-[0-9]+$/i;
+      const numericRegex = /^[0-9]+$/;
+
+      // ALGORITMO: Ignorar líneas vacías o de cabecera mal formadas
+      const dataLines = lines.slice(1).filter(l => l.replace(/,/g, '').trim() !== '');
+
+      if (dataLines.length === 0) {
+        alert("El archivo CSV no contiene datos.");
+        return;
+      }
+
+      const toInsert = dataLines.map((line, index) => {
+        // Separación por comas respetando comillas
+        const values = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.trim().replace(/"/g, ''));
+        const rowNum = index + 2;
+
+        const sku = (values[0] || '').toUpperCase();
+        const loc = (values[1] || '').toUpperCase();
+        const pcsStr = values[2] || "";
+        const descRaw = values[3] || "";
+        const sub = (values[4] || '').toUpperCase();
+
+        // 1. VALIDACIÓN DE CAMPOS VACÍOS
+        if (!sku) validationErrors.push(`Fila ${rowNum}: SKU vacío.`);
+        if (!loc) validationErrors.push(`Fila ${rowNum}: LOCALIZADOR vacío.`);
+        if (pcsStr === "") validationErrors.push(`Fila ${rowNum}: PIEZAS vacío.`);
+        if (!descRaw) validationErrors.push(`Fila ${rowNum}: DESCRIPTION vacía.`);
+        if (!sub) validationErrors.push(`Fila ${rowNum}: SUBINVENTARIO vacío.`);
+
+        // 2. DETECCIÓN DE PATRONES Y COLUMNAS INTERCAMBIADAS
+        // Detectar si el SKU parece un Localizador
+        if (localizadorRegex.test(sku)) {
+          validationErrors.push(`Fila ${rowNum}: El SKU '${sku}' parece un LOCALIZADOR. ¿Columnas intercambiadas?`);
+        }
+        
+        // Detectar si el Localizador NO tiene el formato correcto
+        if (loc && !localizadorRegex.test(loc)) {
+          validationErrors.push(`Fila ${rowNum}: El LOCALIZADOR '${loc}' es inválido. Formato esperado: RACK-COL-LVL (ej: A-1-1).`);
+        }
+
+        // Detectar si Piezas no es numérico
+        if (pcsStr && !numericRegex.test(pcsStr)) {
+          validationErrors.push(`Fila ${rowNum}: Cantidad de PIEZAS '${pcsStr}' inválida. Debe ser solo números.`);
+        }
+
+        // 3. LIMPIEZA DE DATOS (DESCRIPTION)
+        // Eliminar guiones bajos (_) y comillas dobles (")
+        const descClean = descRaw.replace(/[_"]/g, '');
+        
+        return {
+          sku: sku,
+          localizador: loc,
+          pieces: parseInt(pcsStr) || 0,
+          description: descClean,
+          subinventario: sub
+        };
+      });
+
+      // BLOQUEO TOTAL SI HAY ERRORES
+      if (validationErrors.length > 0) {
+        const total = validationErrors.length;
+        const examples = validationErrors.slice(0, 10).join('\n');
+        
+        // Usamos setTimeout para asegurar que el alert se dispare después de procesar
+        setTimeout(() => {
+          alert(`⚠️ ERROR CRÍTICO DE ESTRUCTURA Y PATRONES\n\nSe detectaron ${total} errores en el archivo. El proceso se detuvo por seguridad.\n\nERRORES DETECTADOS:\n${examples}\n\n${total > 10 ? '...y más.' : ''}\n\nREVISA:\n1. Orden: SKU, LOCALIZADOR, PIEZAS, DESCRIPTION, SUBINVENTARIO.\n2. Localizador: Letra-Número-Número.\n3. Piezas: Solo números.`);
+        }, 100);
+
+        if (csvInputRef.current) csvInputRef.current.value = '';
+        return;
+      }
+
+      // INSERCIÓN SI TODO ES CORRECTO
+      if (toInsert.length > 0) {
+        setIsFetching(true);
+        const { error } = await supabase.from('inventory').insert(toInsert);
+        setIsFetching(false);
+        if (error) {
+          console.error(error);
+          alert('Error técnico al subir a Supabase. Verifica tu conexión.');
+        } else {
+          alert(`✅ ÉXITO: ${toInsert.length} registros validados, limpiados y subidos correctamente.`);
+          fetchInventoryDataOnDemand();
+        }
+      }
+    };
+    reader.readAsText(file);
+    if (csvInputRef.current) csvInputRef.current.value = '';
+  };
+
+  /**
+   * BORRAR TODA LA BASE DE DATOS
+   */
+  const handleDeleteAll = async () => {
+    setIsFetching(true);
+    const { error } = await supabase.from('inventory').delete().neq('sku', 'BORRADO_ABSURDO_QUERY');
+    setIsFetching(false);
+    setShowDeleteConfirm(false);
+    if (error) alert('Error al vaciar base de datos');
+    else {
+      alert('Base de datos vaciada correctamente.');
+      fetchInventoryDataOnDemand();
     }
   };
 
@@ -489,6 +643,100 @@ const App: React.FC = () => {
 
   return (
     <div className={`min-h-screen text-zinc-100 flex flex-col ${template.fontFamily}`}>
+      {/* INPUT CSV OCULTO */}
+      <input 
+        type="file" 
+        ref={csvInputRef} 
+        onChange={handleImportCSV} 
+        accept=".csv" 
+        className="hidden" 
+      />
+
+      {/* MODAL DE ADVERTENCIA REGLAS DE SUBIDA */}
+      {showUploadRules && (
+        <div className="fixed inset-0 z-[500] bg-black/80 backdrop-blur-xl flex items-center justify-center p-6">
+          <div className="bg-zinc-900 border border-blue-500/30 p-10 rounded-[3rem] max-w-2xl w-full space-y-8 shadow-2xl relative overflow-hidden">
+            <div className="absolute top-0 right-0 p-8 opacity-5"><UploadCloud size={120} /></div>
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 bg-blue-500/10 rounded-2xl flex items-center justify-center">
+                <Info size={32} className="text-blue-500" />
+              </div>
+              <div>
+                <h2 className="text-3xl font-black uppercase tracking-tighter">REQUISITOS DEL TEMPLATE</h2>
+                <p className="text-zinc-500 text-xs font-bold uppercase tracking-widest">VALIDACIÓN OBLIGATORIA DEL SISTEMA</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 py-4">
+              <div className="bg-zinc-950/50 p-6 rounded-2xl border border-white/5 space-y-2">
+                <div className="flex items-center gap-3 mb-2">
+                  <LayoutGrid size={18} className="text-blue-500" />
+                  <span className="text-xs font-black uppercase text-blue-400">Orden de Columnas</span>
+                </div>
+                <p className="text-[11px] font-bold text-zinc-400 leading-relaxed uppercase tracking-tight">
+                  EL ARCHIVO DEBE TENER ESTE ORDEN EXACTO:<br/>
+                  <span className="text-white">SKU | LOCALIZADOR | PIEZAS | DESCRIPTION | SUBINVENTARIO</span>
+                </p>
+              </div>
+
+              <div className="bg-zinc-950/50 p-6 rounded-2xl border border-white/5 space-y-2">
+                <div className="flex items-center gap-3 mb-2">
+                  <AlertTriangle size={18} className="text-amber-500" />
+                  <span className="text-xs font-black uppercase text-amber-400">Reglas Estrictas</span>
+                </div>
+                <ul className="text-[10px] font-bold text-zinc-400 space-y-2 uppercase tracking-tight">
+                  <li className="flex gap-2"><div className="w-1 h-1 bg-amber-500 rounded-full mt-1.5 shrink-0"></div> Todas las columnas deben tener datos (sin celdas vacías).</li>
+                  <li className="flex gap-2"><div className="w-1 h-1 bg-amber-500 rounded-full mt-1.5 shrink-0"></div> El localizador debe ser Rack-Col-Nivel (Ej: A-1-1).</li>
+                  <li className="flex gap-2"><div className="w-1 h-1 bg-amber-500 rounded-full mt-1.5 shrink-0"></div> La columna de Piezas solo acepta números.</li>
+                </ul>
+              </div>
+
+              <div className="bg-zinc-950/50 p-6 rounded-2xl border border-white/5 space-y-2">
+                <div className="flex items-center gap-3 mb-2">
+                  <Layers size={18} className="text-emerald-500" />
+                  <span className="text-xs font-black uppercase text-emerald-400">Tratamiento de Datos</span>
+                </div>
+                <p className="text-[10px] font-bold text-zinc-400 leading-relaxed uppercase tracking-tight">
+                  EL SISTEMA NO PERMITE LA SUBIDA SI LA DESCRIPCIÓN CONTIENE LOS CARACTERES <span className="text-white">"_"</span> O <span className="text-white">"\""</span>. POR FAVOR, ELIMÍNALOS DE TU ARCHIVO ANTES DE CARGAR.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <button 
+                onClick={() => { setShowUploadRules(false); csvInputRef.current?.click(); }} 
+                className="w-full bg-blue-600 py-6 rounded-2xl font-black uppercase text-xs hover:bg-blue-500 transition-all shadow-xl flex items-center justify-center gap-3"
+              >
+                <UploadCloud size={18} /> ENTENDIDO, SELECCIONAR ARCHIVO
+              </button>
+              <button 
+                onClick={() => setShowUploadRules(false)} 
+                className="w-full bg-zinc-800 py-6 rounded-2xl font-black uppercase text-xs hover:bg-zinc-700 transition-all"
+              >
+                CANCELAR
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CONFIRMACIÓN BORRAR TODO */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-[500] bg-black/80 backdrop-blur-xl flex items-center justify-center p-6">
+          <div className="bg-zinc-900 border border-red-500/30 p-10 rounded-[3rem] max-w-lg w-full text-center space-y-6 shadow-2xl">
+            <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-4">
+              <AlertTriangle size={40} className="text-red-500" />
+            </div>
+            <h2 className="text-3xl font-black uppercase tracking-tighter">¿BORRAR TODO EL CATÁLOGO?</h2>
+            <p className="text-zinc-500 font-bold">Esta acción es irreversible. Se eliminarán todos los registros de la base de datos de Supabase.</p>
+            <div className="flex flex-col gap-3 pt-4">
+              <button onClick={handleDeleteAll} className="w-full bg-red-600 py-6 rounded-2xl font-black uppercase text-xs hover:bg-red-500 transition-all shadow-xl">SÍ, BORRAR TODO</button>
+              <button onClick={() => setShowDeleteConfirm(false)} className="w-full bg-zinc-800 py-6 rounded-2xl font-black uppercase text-xs hover:bg-zinc-700 transition-all">CANCELAR</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* AREA DE IMPRESION OCULTA */}
       <div id="print-area" className="hidden fixed top-0 left-0" style={{ zIndex: -100 }}>
         {Array.from({ length: totalPages }).map((_, pIdx) => (
@@ -578,6 +826,19 @@ const App: React.FC = () => {
 
                 {activeTab === 'database' && (
                   <div className="animate-in fade-in duration-300 space-y-6">
+                    {/* BOTONES DE GESTIÓN MASIVA RESTAURADOS */}
+                    <div className="grid grid-cols-3 gap-3">
+                      <button onClick={() => setShowUploadRules(true)} className="flex items-center justify-center gap-2 p-4 bg-emerald-600/10 border border-emerald-500/20 text-emerald-400 rounded-2xl font-black uppercase text-[9px] hover:bg-emerald-600/20 transition-all">
+                        <UploadCloud size={16} /> SUBIR TEMPLATE
+                      </button>
+                      <button onClick={handleExportCSV} className="flex items-center justify-center gap-2 p-4 bg-blue-600/10 border border-blue-500/20 text-blue-400 rounded-2xl font-black uppercase text-[9px] hover:bg-blue-600/20 transition-all">
+                        <Download size={16} /> DESCARGAR TEMPLATE
+                      </button>
+                      <button onClick={() => setShowDeleteConfirm(true)} className="flex items-center justify-center gap-2 p-4 bg-red-600/10 border border-red-500/20 text-red-400 rounded-2xl font-black uppercase text-[9px] hover:bg-red-600/20 transition-all">
+                        <Trash size={16} /> BORRAR TODO
+                      </button>
+                    </div>
+
                     <div className="flex flex-col md:flex-row gap-4">
                       <div className="relative flex-1"><Search className="absolute left-6 top-1/2 -translate-y-1/2 text-zinc-600" size={20} /><input type="text" placeholder="BUSCAR SKU..." value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 p-6 pl-16 rounded-[1.5rem] text-xs font-black uppercase outline-none" /></div>
                       <div className="flex items-center gap-2 bg-zinc-950 p-4 rounded-[1.5rem] border border-zinc-800 overflow-x-auto custom-scrollbar">
